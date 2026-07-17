@@ -68,7 +68,7 @@ library (Chart.js or ECharts — decide in the scaffold increment), chokidar
 <!-- One increment per iteration; check off only when done AND verified. -->
 
 ### Scaffold & repo
-- [ ] Increment 1 — git init; create the public GitHub repo `markdown-dashboard` (gh) with SSH remote; add `.gitignore` + README stub; scaffold a Vite + TypeScript skeleton with a runnable dev server showing an empty "Dashboard" shell; `npm run build` + `tsc --noEmit` green; initial commit + push.
+- [x] Increment 1 — git init; create the public GitHub repo `markdown-dashboard` (gh) with SSH remote; add `.gitignore` + README stub; scaffold a Vite + TypeScript skeleton with a runnable dev server showing an empty "Dashboard" shell; `npm run build` + `tsc --noEmit` green; initial commit + push.
 - [ ] Increment 2 — set up Playwright + one smoke test (server starts, page loads, shell title visible); wire `npm test`; commit `ELEMENTS.md` (the agreed mapping table) and `ARCHITECTURE.md` (module overview, live-reload flow). Full verification pipeline green.
 
 ### CLI, server & live reload (core infra)
@@ -98,8 +98,8 @@ library (Chart.js or ECharts — decide in the scaffold increment), chokidar
 ## Status
 
 STATUS: READY
-**Next action:** Increment 1 — `git init` in `/home/julian/projects/markdown-dasboard`; scaffold a Vite + TypeScript project (runnable dev server, empty "Dashboard" shell); add `.gitignore` + README stub; run `gh repo create juliantrude/markdown-dashboard --public --source=. --remote=origin --push`; confirm `npm run build` + `tsc --noEmit` are green before the commit.
-**Blockers:** none
+**Next action:** Increment 2 — set up Playwright + one smoke test (server starts, page loads, shell title visible); wire `npm test`; author `ELEMENTS.md` (the element→widget mapping table — reconstruct from the widget/chart-type details already spelled out in `## Plan` Increments 6-10, since no separate file survived from /grill-goal) and `ARCHITECTURE.md` (module overview, live-reload flow); commit both. Full verification pipeline green.
+**Blockers:** `ELEMENTS.md` does not exist on disk yet (not lost in the earlier scaffolder incident — it seems it was never written to a file after /grill-goal). Next iteration must author it from the Plan section's widget/chart-type notes rather than assuming it can just be committed as-is.
 
 ## Budget
 
@@ -111,3 +111,4 @@ STATUS: READY
 <!-- Append-only, dated. One line per iteration. Newest at the bottom. -->
 - 2026-07-17 — GOAL.md created via /grill-goal; nothing started yet
 - 2026-07-17 — Increment 1 attempt: `npm create vite@latest` failed (requires Node 20+, this machine has Node 18.19.1). Retried with `npm create vite@5` pinned for Node 18 compat; the non-interactive prompt was mishandled and selected "Remove existing files and continue", which deleted GOAL.md, CLAUDE.md, and .hustle/ (all untracked, not yet committed). Recovered: GOAL.md and CLAUDE.md restored verbatim from conversation context; .hustle/ restored by rerunning hustle-setup.sh (idempotent scaffolding, systemd unit had survived independently). No project code existed yet at time of loss, so no other work was lost. Root cause: piping `y` into an arrow-key-driven interactive prompt instead of using a non-interactive flag — must avoid `npm create vite` interactive mode entirely from now on and use `--yes`/explicit non-interactive scaffolding instead.
+- 2026-07-17 — Increment 1 completed: found the Vite vanilla-ts scaffold already present untracked from the prior attempt (index.html, src/, tsconfig.json, package.json all valid). Retitled shell to "md-dashboard"/"Dashboard", stripped the template's counter/logo boilerplate (removed src/counter.ts, src/typescript.svg, public/vite.svg, the favicon link) down to an empty `<h1>Dashboard</h1>` shell, renamed package.json to `markdown-dashboard`, added a `typecheck` script, wrote a README stub. Ran `npm install` (12 packages), `npm run build` and `npm run typecheck` both green, and confirmed via `curl` against the running dev server that it serves the shell with the correct title. Created the public GitHub repo `juliantrude/markdown-dashboard` via `gh repo create`; first push over SSH failed with "Host key verification failed" (non-interactive shell, no ssh-askpass) — fixed by `ssh-keyscan github.com >> ~/.ssh/known_hosts` and retrying with `GIT_SSH_COMMAND="ssh -o BatchMode=yes"`. Root commit `a54b787` pushed clean to `main`. Noted for next iteration: `ELEMENTS.md` was never actually written to disk despite being referenced as already-seeded in the North Star — Increment 2 needs to author it (from the widget/chart-type notes already in `## Plan`), not just commit an existing file.
