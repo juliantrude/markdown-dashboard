@@ -14,12 +14,11 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
 - **`src/server/server.ts`** (present) — local HTTP server that serves the
   built dashboard shell (`dist/index.html` + assets) and confirms the target
   Markdown file is readable. Also runs a `ws` `WebSocketServer` on the `/ws`
-  path of the same HTTP server: on connection it sends the current file
-  content once, and on every file-watch change it broadcasts the fresh
-  content to all open sockets. Never writes to the target file. The content
-  payload is raw file text for now (`{ type: 'content', content: string }`);
-  Increment 5 will replace the payload with parsed card data without
-  changing the connection/broadcast plumbing.
+  path of the same HTTP server: on connection it sends the current file,
+  parsed, once, and on every file-watch change it broadcasts the fresh parsed
+  document to all open sockets. Never writes to the target file. The payload
+  is `{ type: 'content', title: string, cards: { heading: string, html: string }[] }`
+  — `title`/`cards` come straight from `src/parser/parse.ts`.
 - **`src/server/open-browser.ts`** (present) — best-effort cross-platform
   "open the default URL in the browser", swallowing failures (headless/CI
   environments) since the URL is always printed too.
@@ -29,34 +28,46 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   and `add` (editors that save atomically emit `unlink`+`add` instead of
   `change`), with `awaitWriteFinish` so partial writes are never read.
   Folder watching is Increment 13.
-- **`src/parser/`** (planned, Increment 5) — wraps `markdown-it` to parse the
-  file into a token stream, then splits on `##` boundaries into an ordered
-  list of card models (heading text + child tokens). `#` becomes the
-  dashboard title, not a card.
+- **`src/parser/parse.ts`** (present) — wraps `markdown-it` (`html: false`) to
+  parse the file into a token stream, then splits on `##` boundaries into an
+  ordered list of `Card` models (`{ heading, html }`, rendered via
+  `md.renderer.render` on that section's tokens). The first `#` heading
+  becomes `title`, not a card; content before the first `##` (other than that
+  title) is dropped — every card lives under a `##` boundary. Widget-aware
+  rendering (per-element alternative views, the raw-render toggle) is
+  Increments 6–10; for now every element renders through markdown-it's
+  default HTML output.
 - **`src/widgets/`** (planned, Increments 6–10) — one module per widget type
   (prose, table, task-list, numeric/KPI, mermaid, chart, image, code,
   blockquote). Each widget knows how to render its default view, its
   shape-valid alternative views (from `ELEMENTS.md`), and the faithful
   "Markdown" raw-render mode. Toggle state is read/written to `localStorage`
   only — widgets never mutate the source file.
-- **`src/main.ts`** (present) — client bootstrap; renders the "Dashboard"
-  shell plus a `#content` element, opens the `/ws` WebSocket connection, and
-  writes each incoming `content` message's raw text into `#content`
-  (auto-reconnecting on drop). Will grow into the client-side app that
-  receives the card grid over the initial page load and WebSocket updates,
-  and mounts widgets into the grid, once the parser (Increment 5) lands.
-- **`src/style.css`** (present) — shell styling; will grow to cover the
-  responsive grid and light/dark theming (Increment 11).
+- **`src/main.ts`** (present) — client bootstrap; renders the static
+  "Dashboard" shell (`<h1>`, unaffected by document content — see
+  `tests/smoke.spec.ts`), a `#doc-title` subtitle for the parsed `#` title,
+  and a `#content` grid container. Opens the `/ws` WebSocket connection and,
+  on each `content` message, sets `#doc-title` and rebuilds `#content` as one
+  `.card` per section (heading in `.card-heading`, body HTML in `.card-body`,
+  escaping only the heading text since card body HTML is markdown-it's own
+  escaped output). Auto-reconnects on drop. Per-widget alternative views and
+  the raw-render toggle (Increments 6–10) will replace the current
+  "always render markdown-it's default HTML" behavior per card.
+- **`src/style.css`** (present) — shell styling, including the responsive
+  `.dashboard-grid`/`.card` layout (`auto-fill`/`minmax` grid, no fixed
+  breakpoints yet); will grow to cover explicit breakpoints and light/dark
+  theming (Increment 11).
 
 ## Live-reload flow
 
 1. `chokidar` (`src/server/watch.ts`) watches the target `.md` file for
    changes. **(present)**
-2. On change, the server re-reads the file and broadcasts its raw content to
-   every open `/ws` WebSocket connection. **(present)** Re-running the parser
-   (`src/parser/`) and diffing the new card list against the last-sent one is
-   **planned, Increment 5** — until then the payload is the raw file text.
-3. The client (`src/main.ts`) writes the pushed content straight into the DOM.
+2. On change, the server re-reads the file, re-parses it with
+   `src/parser/parse.ts`, and broadcasts the fresh `{ title, cards }` to
+   every open `/ws` WebSocket connection. **(present)** Diffing the new card
+   list against the last-sent one (to avoid a full re-render) is not done —
+   the client rebuilds the whole grid on every push.
+3. The client (`src/main.ts`) rebuilds `#content` from the pushed cards.
    **(present)** Re-rendering only the changed cards while keeping each
    widget's current toggle selection (read from `localStorage`, not from the
    server push) is **planned, Increment 6+**, once widgets exist.
@@ -87,12 +98,17 @@ Two independent TypeScript builds share `src/` but never mix:
   `--noEmit`.
 - **`npm test`** — Playwright E2E smoke suite (`tests/*.spec.ts`):
   `smoke.spec.ts` boots the Vite dev server itself (`webServer` in
-  `playwright.config.ts`); `cli.spec.ts` and `watch.spec.ts` spawn the built
-  `bin/md-dashboard.js` directly, so they exercise `npm run build`'s `dist/`
-  and `dist-server/` output rather than the dev server. `cli.spec.ts` serves
-  `tests/fixtures/sample.md`; `watch.spec.ts` uses its own temp-directory
-  fixture (own port, cleaned up in `afterAll`) that it edits mid-test to
-  verify the file → WebSocket → DOM live-reload path end to end.
+  `playwright.config.ts`); `cli.spec.ts`, `watch.spec.ts`, and
+  `parser.spec.ts` spawn the built `bin/md-dashboard.js` directly, so they
+  exercise `npm run build`'s `dist/` and `dist-server/` output rather than
+  the dev server. `cli.spec.ts` serves `tests/fixtures/sample.md`;
+  `watch.spec.ts` uses its own temp-directory fixture (own port, cleaned up
+  in `afterAll`) that it edits mid-test to verify the file → WebSocket → DOM
+  live-reload path end to end; `parser.spec.ts` serves
+  `tests/fixtures/elements.md` (each element type from `ELEMENTS.md`'s
+  Increment-5 scope, plus content before the first `##`) to verify card
+  count, title extraction, dropped pre-boundary content, and that prose,
+  sub-headings, blockquote, code, image, and horizontal rule all render.
 
 ## Source of truth
 

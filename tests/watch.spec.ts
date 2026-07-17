@@ -13,7 +13,7 @@ let filePath: string
 test.beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'md-dashboard-watch-'))
   filePath = join(dir, 'live.md')
-  await writeFile(filePath, '# Watch Test\n\nInitial content.\n')
+  await writeFile(filePath, '# Watch Test\n\n## Status\n\nInitial content.\n')
 
   cliProcess = spawn(
     'node',
@@ -42,7 +42,7 @@ test('editing the watched file updates the dashboard live with no manual reload'
   await page.goto(`http://localhost:${PORT}`)
   await expect(page.locator('#content')).toContainText('Initial content.')
 
-  await writeFile(filePath, '# Watch Test\n\nUpdated content.\n')
+  await writeFile(filePath, '# Watch Test\n\n## Status\n\nUpdated content.\n')
 
   await expect(page.locator('#content')).toContainText('Updated content.', { timeout: 2_000 })
 })

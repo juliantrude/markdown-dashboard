@@ -14,5 +14,5 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src/cli.ts", "src/server/**/*.ts"]
+  "include": ["src/cli.ts", "src/server/**/*.ts", "src/parser/**/*.ts"]
 }

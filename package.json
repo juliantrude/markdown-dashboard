@@ -15,6 +15,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
+    "@types/markdown-it": "^14.1.2",
     "@types/node": "^18.19.130",
     "@types/ws": "^8.18.1",
     "typescript": "~5.6.2",
@@ -22,6 +23,7 @@
   },
   "dependencies": {
     "chokidar": "^4.0.3",
+    "markdown-it": "^14.3.0",
     "ws": "^8.21.1"
   }
 }

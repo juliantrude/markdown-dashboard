@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { dirname, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { WebSocketServer, type WebSocket } from 'ws'
+import { parseDocument, type ParsedDocument } from '../parser/parse.js'
 import { watchFile, type FileWatcher } from './watch.js'
 
 const MIME_TYPES: Record<string, string> = {
@@ -68,21 +69,22 @@ export async function startServer({ filePath, port }: StartServerOptions): Promi
   const wss = new WebSocketServer({ server, path: '/ws' })
   const clients = new Set<WebSocket>()
 
-  const send = (socket: WebSocket, content: string): void => {
-    socket.send(JSON.stringify({ type: 'content', content }))
+  const send = (socket: WebSocket, doc: ParsedDocument): void => {
+    socket.send(JSON.stringify({ type: 'content', ...doc }))
   }
 
   wss.on('connection', (socket) => {
     clients.add(socket)
     socket.on('close', () => clients.delete(socket))
     readFile(filePath, 'utf-8')
-      .then((content) => send(socket, content))
+      .then((content) => send(socket, parseDocument(content)))
       .catch((error: unknown) => console.error('md-dashboard: failed to send initial content:', error))
   })
 
   const fileWatcher: FileWatcher = watchFile(filePath, (content) => {
+    const doc = parseDocument(content)
     for (const client of clients) {
-      if (client.readyState === client.OPEN) send(client, content)
+      if (client.readyState === client.OPEN) send(client, doc)
     }
   })
 

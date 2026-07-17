@@ -30,9 +30,54 @@ h1 {
   line-height: 1.1;
 }
 
+.dashboard-subtitle {
+  color: rgba(255, 255, 255, 0.6);
+  margin-top: 0;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.card {
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 0.5rem;
+  padding: 1.25rem;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.card-heading {
+  margin-top: 0;
+  font-size: 1.25rem;
+}
+
+.card-body :first-child {
+  margin-top: 0;
+}
+
+.card-body :last-child {
+  margin-bottom: 0;
+}
+
+.card-body img {
+  max-width: 100%;
+}
+
 @media (prefers-color-scheme: light) {
   :root {
     color: #213547;
     background-color: #ffffff;
+  }
+
+  .dashboard-subtitle {
+    color: rgba(33, 53, 71, 0.6);
+  }
+
+  .card {
+    border-color: rgba(33, 53, 71, 0.15);
+    background: rgba(33, 53, 71, 0.03);
   }
 }

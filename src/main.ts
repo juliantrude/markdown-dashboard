@@ -3,15 +3,23 @@ import './style.css'
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div class="dashboard">
     <h1>Dashboard</h1>
-    <pre id="content" class="dashboard-content"></pre>
+    <p id="doc-title" class="dashboard-subtitle"></p>
+    <div id="content" class="dashboard-grid"></div>
   </div>
 `
 
-const contentEl = document.querySelector<HTMLPreElement>('#content')!
+const docTitleEl = document.querySelector<HTMLParagraphElement>('#doc-title')!
+const contentEl = document.querySelector<HTMLDivElement>('#content')!
+
+interface Card {
+  heading: string
+  html: string
+}
 
 interface ContentMessage {
   type: 'content'
-  content: string
+  title: string
+  cards: Card[]
 }
 
 function isContentMessage(value: unknown): value is ContentMessage {
@@ -19,8 +27,27 @@ function isContentMessage(value: unknown): value is ContentMessage {
     typeof value === 'object' &&
     value !== null &&
     (value as { type?: unknown }).type === 'content' &&
-    typeof (value as { content?: unknown }).content === 'string'
+    typeof (value as { title?: unknown }).title === 'string' &&
+    Array.isArray((value as { cards?: unknown }).cards)
   )
+}
+
+function renderCards({ title, cards }: ContentMessage): void {
+  docTitleEl.textContent = title
+  contentEl.innerHTML = cards
+    .map(
+      (card) => `
+        <section class="card">
+          <h2 class="card-heading">${escapeHtml(card.heading)}</h2>
+          <div class="card-body">${card.html}</div>
+        </section>
+      `,
+    )
+    .join('')
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!)
 }
 
 // Reconnects on drop (e.g. server restart) so live reload keeps working
@@ -31,7 +58,7 @@ function connectLiveReload(): void {
 
   socket.addEventListener('message', (event) => {
     const message: unknown = JSON.parse(event.data as string)
-    if (isContentMessage(message)) contentEl.textContent = message.content
+    if (isContentMessage(message)) renderCards(message)
   })
 
   socket.addEventListener('close', () => {
