@@ -3,6 +3,8 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { dirname, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { WebSocketServer, type WebSocket } from 'ws'
+import { watchFile, type FileWatcher } from './watch.js'
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -63,6 +65,27 @@ export async function startServer({ filePath, port }: StartServerOptions): Promi
       })
   })
 
+  const wss = new WebSocketServer({ server, path: '/ws' })
+  const clients = new Set<WebSocket>()
+
+  const send = (socket: WebSocket, content: string): void => {
+    socket.send(JSON.stringify({ type: 'content', content }))
+  }
+
+  wss.on('connection', (socket) => {
+    clients.add(socket)
+    socket.on('close', () => clients.delete(socket))
+    readFile(filePath, 'utf-8')
+      .then((content) => send(socket, content))
+      .catch((error: unknown) => console.error('md-dashboard: failed to send initial content:', error))
+  })
+
+  const fileWatcher: FileWatcher = watchFile(filePath, (content) => {
+    for (const client of clients) {
+      if (client.readyState === client.OPEN) send(client, content)
+    }
+  })
+
   await new Promise<void>((resolvePromise, reject) => {
     server.once('error', reject)
     server.listen(port, resolvePromise)
@@ -71,6 +94,10 @@ export async function startServer({ filePath, port }: StartServerOptions): Promi
   return {
     server,
     url: `http://localhost:${port}`,
-    close: () => new Promise((resolveClose) => server.close(() => resolveClose())),
+    close: async () => {
+      await fileWatcher.close()
+      await new Promise<void>((resolveClose) => wss.close(() => resolveClose()))
+      await new Promise<void>((resolveClose) => server.close(() => resolveClose()))
+    },
   }
 }

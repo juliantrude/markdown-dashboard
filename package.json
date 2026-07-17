@@ -16,7 +16,12 @@
   "devDependencies": {
     "@playwright/test": "^1.61.1",
     "@types/node": "^18.19.130",
+    "@types/ws": "^8.18.1",
     "typescript": "~5.6.2",
     "vite": "^5.4.10"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.3",
+    "ws": "^8.21.1"
   }
 }
