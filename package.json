@@ -3,15 +3,19 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "bin": {
+    "md-dashboard": "bin/md-dashboard.js"
+  },
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && tsc -p tsconfig.server.json",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "test": "playwright test"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
+    "@types/node": "^18.19.130",
     "typescript": "~5.6.2",
     "vite": "^5.4.10"
   }
