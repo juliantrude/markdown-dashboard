@@ -1,11 +1,14 @@
 import MarkdownIt from 'markdown-it'
-import type Token from 'markdown-it/lib/token.mjs'
+import Token from 'markdown-it/lib/token.mjs'
 
 const md: MarkdownIt = new MarkdownIt({ html: false })
 
 export interface Card {
   heading: string
+  /** Default widget render (Increments 7-10 replace this per element type; for now identical to plain markdown-it output). */
   html: string
+  /** Faithful "Markdown" raw-render mode (ELEMENTS.md): real lists, real (disabled) checkboxes for `- [ ]`/`- [x]`. */
+  markdownHtml: string
 }
 
 export interface ParsedDocument {
@@ -15,6 +18,42 @@ export interface ParsedDocument {
 
 function headingText(tokens: Token[], headingOpenIndex: number): string {
   return tokens[headingOpenIndex + 1]?.content ?? ''
+}
+
+const taskMarker = /^\[([ xX])\]\s+/
+
+/**
+ * Mutates `tokens` in place so `- [ ]` / `- [x]` list items render as real,
+ * disabled checkboxes instead of literal bracket text — the "Markdown"
+ * raw-render mode's defining example (ELEMENTS.md). Must run *after* the
+ * default-widget HTML has already been rendered from these tokens, since it
+ * mutates the shared token array.
+ */
+function markCheckboxes(tokens: Token[]): void {
+  for (let i = 0; i < tokens.length; i++) {
+    const inline = tokens[i]
+    if (inline.type !== 'inline' || !inline.children) continue
+
+    const first = inline.children[0]
+    if (!first || first.type !== 'text') continue
+
+    const match = taskMarker.exec(first.content)
+    if (!match) continue
+
+    first.content = first.content.slice(match[0].length)
+
+    const checkbox = new Token('html_inline', '', 0)
+    checkbox.content = `<input type="checkbox" disabled${match[1] !== ' ' ? ' checked' : ''}> `
+    inline.children.unshift(checkbox)
+
+    for (let j = i - 1; j >= 0; j--) {
+      if (tokens[j].type === 'list_item_open') {
+        tokens[j].attrJoin('class', 'task-list-item')
+        break
+      }
+      if (tokens[j].type === 'list_item_close') break
+    }
+  }
 }
 
 /**
@@ -35,7 +74,10 @@ export function parseDocument(markdown: string): ParsedDocument {
 
   const flush = (): void => {
     if (currentHeading !== null) {
-      cards.push({ heading: currentHeading, html: md.renderer.render(currentTokens, md.options, {}) })
+      const html = md.renderer.render(currentTokens, md.options, {})
+      markCheckboxes(currentTokens)
+      const markdownHtml = md.renderer.render(currentTokens, md.options, {})
+      cards.push({ heading: currentHeading, html, markdownHtml })
     }
     currentHeading = null
     currentTokens = []

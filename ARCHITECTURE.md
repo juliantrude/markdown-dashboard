@@ -30,29 +30,41 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   Folder watching is Increment 13.
 - **`src/parser/parse.ts`** (present) — wraps `markdown-it` (`html: false`) to
   parse the file into a token stream, then splits on `##` boundaries into an
-  ordered list of `Card` models (`{ heading, html }`, rendered via
-  `md.renderer.render` on that section's tokens). The first `#` heading
-  becomes `title`, not a card; content before the first `##` (other than that
-  title) is dropped — every card lives under a `##` boundary. Widget-aware
-  rendering (per-element alternative views, the raw-render toggle) is
-  Increments 6–10; for now every element renders through markdown-it's
-  default HTML output.
-- **`src/widgets/`** (planned, Increments 6–10) — one module per widget type
-  (prose, table, task-list, numeric/KPI, mermaid, chart, image, code,
-  blockquote). Each widget knows how to render its default view, its
-  shape-valid alternative views (from `ELEMENTS.md`), and the faithful
-  "Markdown" raw-render mode. Toggle state is read/written to `localStorage`
-  only — widgets never mutate the source file.
+  ordered list of `Card` models, rendered via `md.renderer.render` on that
+  section's tokens. The first `#` heading becomes `title`, not a card;
+  content before the first `##` (other than that title) is dropped — every
+  card lives under a `##` boundary. Each card carries **two** renders:
+  `html` (the default widget — currently plain markdown-it output; per-type
+  widgets replace this in Increments 7–10) and `markdownHtml` (the faithful
+  "Markdown" raw-render mode from `ELEMENTS.md` — same tokens, rendered a
+  second time after `markCheckboxes()` mutates `- [ ]`/`- [x]` list items
+  into real, disabled `<input type="checkbox">` elements). `html` is always
+  rendered *before* the mutation runs, since both renders share one token
+  array.
+- **`src/widgets/`** (planned, Increments 7–10) — one module per data
+  widget type (table, task-list, numeric/KPI, mermaid, chart). Each widget
+  knows how to render its default view and its shape-valid alternative views
+  (from `ELEMENTS.md`); they plug into the generic toggle framework already
+  present in `src/main.ts` (below) by contributing additional `WidgetView`
+  entries per card. Toggle state is read/written to `localStorage` only —
+  widgets never mutate the source file.
 - **`src/main.ts`** (present) — client bootstrap; renders the static
   "Dashboard" shell (`<h1>`, unaffected by document content — see
   `tests/smoke.spec.ts`), a `#doc-title` subtitle for the parsed `#` title,
   and a `#content` grid container. Opens the `/ws` WebSocket connection and,
   on each `content` message, sets `#doc-title` and rebuilds `#content` as one
-  `.card` per section (heading in `.card-heading`, body HTML in `.card-body`,
-  escaping only the heading text since card body HTML is markdown-it's own
-  escaped output). Auto-reconnects on drop. Per-widget alternative views and
-  the raw-render toggle (Increments 6–10) will replace the current
-  "always render markdown-it's default HTML" behavior per card.
+  `.card` per section: a `.card-header` (heading + toggle) and a
+  `.card-body`. **Widget toggle framework (present, Increment 6):** each card
+  builds a small `WidgetView[]` (currently `default` → `card.html`,
+  `markdown` → `card.markdownHtml`; Increments 7–10 add more ids per card,
+  e.g. chart types) and renders one icon button per view, top-right of the
+  card. The selected view id is looked up/stored in `localStorage` keyed by
+  `md-dashboard:view:<heading>`, so it survives both a live-reload push and a
+  full page reload; a card's heading is assumed unique within a document (not
+  enforced). A single delegated `click` listener on `#content` handles every
+  toggle button so it keeps working across full-grid rebuilds without
+  re-binding. Escaping is applied to the heading text only — card body HTML
+  is already markdown-it's own escaped output.
 - **`src/style.css`** (present) — shell styling, including the responsive
   `.dashboard-grid`/`.card` layout (`auto-fill`/`minmax` grid, no fixed
   breakpoints yet); will grow to cover explicit breakpoints and light/dark
@@ -68,9 +80,11 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
    list against the last-sent one (to avoid a full re-render) is not done —
    the client rebuilds the whole grid on every push.
 3. The client (`src/main.ts`) rebuilds `#content` from the pushed cards.
-   **(present)** Re-rendering only the changed cards while keeping each
-   widget's current toggle selection (read from `localStorage`, not from the
-   server push) is **planned, Increment 6+**, once widgets exist.
+   **(present)** Each card's toggle selection is read from `localStorage` (not
+   from the server push), so it is preserved across every rebuild. **(present,
+   Increment 6)** The rebuild still replaces the whole grid rather than
+   diffing/patching just the changed cards — an optimization left for later if
+   it proves necessary.
 4. Target latency: file save → visible dashboard update in **< ~1s** —
    verified by `tests/watch.spec.ts` (typically completes in a few hundred ms).
 
@@ -108,7 +122,11 @@ Two independent TypeScript builds share `src/` but never mix:
   `tests/fixtures/elements.md` (each element type from `ELEMENTS.md`'s
   Increment-5 scope, plus content before the first `##`) to verify card
   count, title extraction, dropped pre-boundary content, and that prose,
-  sub-headings, blockquote, code, image, and horizontal rule all render.
+  sub-headings, blockquote, code, image, and horizontal rule all render;
+  `widgets.spec.ts` serves `tests/fixtures/widgets.md` (a task list) to
+  verify the toggle switches between the default render (no checkboxes yet)
+  and the Markdown raw-render mode (real, disabled checkboxes reflecting
+  done/open state), and that the chosen view survives a full page reload.
 
 ## Source of truth
 
