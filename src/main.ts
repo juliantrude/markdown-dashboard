@@ -1,6 +1,15 @@
 import './style.css'
 import { CHART_VIEW_META, destroyAllCharts, destroyChart, mountChart, type ChartType, type TableData } from './widgets/chart-view.js'
 import { renderProgressBarHtml, renderTaskItemsHtml, taskDonutData, type TaskItem } from './widgets/tasklist-view.js'
+import {
+  destroyAllGauges,
+  destroyGauge,
+  kpiTableData,
+  mountGauge,
+  renderKpiTilesHtml,
+  renderStatTileHtml,
+  type KpiItem,
+} from './widgets/kpi-view.js'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div class="dashboard">
@@ -20,6 +29,8 @@ interface Card {
   table?: TableData
   chartTypes?: ChartType[]
   tasks?: TaskItem[]
+  kpi?: KpiItem[]
+  metric?: KpiItem
 }
 
 interface ContentMessage {
@@ -38,12 +49,15 @@ function isContentMessage(value: unknown): value is ContentMessage {
   )
 }
 
-// Per-card widget view toggle. Increments 9-10 will register more view ids
-// (KPI, ...); every card offers its default widget render and the faithful
-// "Markdown" raw-render mode, plus (Increment 7) one entry per chart type
-// valid for the card's table, and (Increment 8) a progress bar/donut pair if
-// the card has task-list items.
-type WidgetKind = 'default' | 'markdown' | 'chart' | 'progress-bar' | 'progress-donut'
+// Per-card widget view toggle. Increment 10 will register more view ids
+// (mermaid/chart fences); every card offers its default widget render and the
+// faithful "Markdown" raw-render mode, plus (Increment 7) one entry per chart
+// type valid for the card's table, (Increment 8) a progress bar/donut pair if
+// the card has task-list items, and (Increment 9) KPI tiles/Bar/Pie for a
+// numeric list, or a Gauge for a lone `Metric: value` (whose "default" view
+// renders a stat tile, not plain text — ELEMENTS.md's only element so far
+// where the default widget isn't the plain markdown-it render).
+type WidgetKind = 'default' | 'markdown' | 'chart' | 'progress-bar' | 'progress-donut' | 'kpi-tiles' | 'kpi-bar' | 'kpi-pie' | 'gauge'
 
 interface WidgetView {
   id: string
@@ -64,6 +78,14 @@ function viewsFor(card: Card): WidgetView[] {
   if (card.tasks?.length) {
     views.push({ id: 'progress-bar', label: 'Progress bar', icon: '▬', kind: 'progress-bar' })
     views.push({ id: 'progress-donut', label: 'Progress donut', icon: '🍩', kind: 'progress-donut' })
+  }
+  if (card.kpi?.length) {
+    views.push({ id: 'kpi-tiles', label: 'KPI tiles', icon: '🔢', kind: 'kpi-tiles' })
+    views.push({ id: 'kpi-bar', label: 'Bar', icon: '📊', kind: 'kpi-bar' })
+    views.push({ id: 'kpi-pie', label: 'Pie', icon: '🥧', kind: 'kpi-pie' })
+  }
+  if (card.metric) {
+    views.push({ id: 'gauge', label: 'Gauge', icon: '⏱', kind: 'gauge' })
   }
   return views
 }
@@ -91,6 +113,16 @@ function renderCardBody(card: Card, viewId: string): string {
   if (active?.kind === 'progress-donut' && card.tasks) {
     return `<div class="task-progress"><div class="chart-container chart-container-small"><canvas></canvas></div>${renderTaskItemsHtml(card.tasks)}</div>`
   }
+  if (active?.kind === 'kpi-tiles' && card.kpi) return renderKpiTilesHtml(card.kpi)
+  if ((active?.kind === 'kpi-bar' || active?.kind === 'kpi-pie') && card.kpi) {
+    return '<div class="chart-container"><canvas></canvas></div>'
+  }
+  if (active?.kind === 'gauge' && card.metric) {
+    return '<div class="chart-container chart-container-gauge"><canvas></canvas></div>'
+  }
+  // ELEMENTS.md: a lone `Metric: value` line's *default* widget is already a
+  // stat tile, not the plain paragraph text every other element's "default" is.
+  if (viewId === 'default' && card.metric) return renderStatTileHtml(card.metric)
   return card.html
 }
 
@@ -98,14 +130,19 @@ function renderCardBody(card: Card, viewId: string): string {
 function mountActiveView(card: Card, viewId: string, bodyEl: HTMLElement): void {
   const views = viewsFor(card)
   const active = views.find((view) => view.id === viewId)
+  destroyChart(card.heading)
+  destroyGauge(card.heading)
+  const canvas = bodyEl.querySelector('canvas')
   if (active?.kind === 'chart' && card.table) {
-    const canvas = bodyEl.querySelector('canvas')!
-    mountChart(card.heading, canvas, card.table, active.id as ChartType)
+    mountChart(card.heading, canvas!, card.table, active.id as ChartType)
   } else if (active?.kind === 'progress-donut' && card.tasks) {
-    const canvas = bodyEl.querySelector('canvas')!
-    mountChart(card.heading, canvas, taskDonutData(card.tasks), 'donut')
-  } else {
-    destroyChart(card.heading)
+    mountChart(card.heading, canvas!, taskDonutData(card.tasks), 'donut')
+  } else if (active?.kind === 'kpi-bar' && card.kpi) {
+    mountChart(card.heading, canvas!, kpiTableData(card.kpi), 'bar')
+  } else if (active?.kind === 'kpi-pie' && card.kpi) {
+    mountChart(card.heading, canvas!, kpiTableData(card.kpi), 'pie')
+  } else if (active?.kind === 'gauge' && card.metric) {
+    mountGauge(card.heading, canvas!, card.metric)
   }
 }
 
@@ -134,6 +171,7 @@ function renderCards({ title, cards }: ContentMessage): void {
   // down existing Chart.js instances first so none are left mounted on
   // detached canvases.
   destroyAllCharts()
+  destroyAllGauges()
   contentEl.innerHTML = cards
     .map((card) => {
       const viewId = storedViewId(card.heading)

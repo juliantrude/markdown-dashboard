@@ -123,6 +123,38 @@ h1 {
   height: 160px;
 }
 
+.chart-container-gauge {
+  height: 140px;
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 0.75rem;
+}
+
+.kpi-tile {
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 0.4rem;
+  padding: 0.6rem 0.75rem;
+}
+
+.kpi-tile-single {
+  max-width: 220px;
+}
+
+.kpi-value {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.kpi-label {
+  margin: 0.15rem 0 0;
+  font-size: 0.85rem;
+  color: var(--chart-text-secondary);
+}
+
 .progress-bar {
   height: 0.6rem;
   border-radius: 999px;
@@ -195,5 +227,9 @@ h1 {
 
   .progress-bar {
     background: rgba(33, 53, 71, 0.12);
+  }
+
+  .kpi-tile {
+    border-color: rgba(33, 53, 71, 0.15);
   }
 }

@@ -19,10 +19,12 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   document to all open sockets. Never writes to the target file. The payload
   is `{ type: 'content', title: string, cards: Card[] }` — `title`/`cards`
   come straight from `src/parser/parse.ts`; `Card` is `{ heading, html,
-  markdownHtml, table?, chartTypes?, tasks? }` (`table`/`chartTypes` only
-  present when the card's first table yields chartable data — see
-  `src/parser/table.ts` below; `tasks` only present when the card contains
-  `- [ ]`/`- [x]` items — see `src/parser/tasklist.ts` below).
+  markdownHtml, table?, chartTypes?, tasks?, kpi?, metric? }`
+  (`table`/`chartTypes` only present when the card's first table yields
+  chartable data — see `src/parser/table.ts` below; `tasks` only present when
+  the card contains `- [ ]`/`- [x]` items — see `src/parser/tasklist.ts`
+  below; `kpi`/`metric` only present for a numeric list / lone `Metric: value`
+  line respectively, mutually exclusive — see `src/parser/kpi.ts` below).
 - **`src/server/open-browser.ts`** (present) — best-effort cross-platform
   "open the default URL in the browser", swallowing failures (headless/CI
   environments) since the URL is always printed too.
@@ -44,10 +46,12 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   rendered a second time after `markCheckboxes()` mutates `- [ ]`/`- [x]`
   list items into real, disabled `<input type="checkbox">` elements). `html`
   is always rendered *before* the mutation runs, since both renders share one
-  token array. It also calls `src/parser/table.ts`'s `extractTableData` and
-  `src/parser/tasklist.ts`'s `extractTaskItems` on the same (pre-mutation)
-  tokens, to look for the card's first table and any task-list items
-  respectively — both must run before `markCheckboxes` for the same reason.
+  token array. It also calls `src/parser/table.ts`'s `extractTableData`,
+  `src/parser/tasklist.ts`'s `extractTaskItems`, and (Increment 9)
+  `src/parser/kpi.ts`'s `extractKpiListItems`/`extractSingleMetric` on the
+  same (pre-mutation) tokens, to look for the card's first table, any
+  task-list items, and a numeric list / lone metric line respectively — all
+  must run before `markCheckboxes` for the same reason.
 - **`src/parser/table.ts`** (present, Increment 7) — server-side table→chart
   extraction. `extractTableData` walks a card's token stream for the first
   `table_open`…`table_close` block, takes the first column as `categories`
@@ -87,6 +91,38 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   and donut views, since `ELEMENTS.md` requires each milestone's individual
   done/open state to stay visible alongside the aggregate, never a bare
   percentage.
+- **`src/parser/kpi.ts`** (present, Increment 9) — server-side numeric-list /
+  single-metric extraction, both built on one `Key: value` regex
+  (`^(.+?):\s*([+-]?[\d,]+(?:\.\d+)?)(%)?\s*$`, trailing `%` tracked so the
+  widget can decide formatting/gauge-max later). `extractKpiListItems` scans a
+  card's first bullet/ordered list; every item must match the regex or the
+  whole list is rejected (`undefined`) — falls back to the plain List default
+  render, per `ELEMENTS.md`'s "only alternatives valid for the data shape".
+  `extractSingleMetric` only fires when the card has **no** list and **exactly
+  one** `inline` token total (a table cell or an extra prose paragraph both
+  disqualify it) — this is `ELEMENTS.md`'s "Single large number / Metric: 42"
+  element, the first one whose *default* widget isn't the plain markdown-it
+  render (see `src/main.ts` below). `parse.ts`'s `flush()` tries the list shape
+  first and only tries the single-metric shape when the list didn't match, so
+  `Card.kpi`/`Card.metric` are mutually exclusive.
+- **`src/widgets/kpi-view.ts`** (present, Increment 9) — client-side KPI
+  stat-tile/chart/gauge rendering. `renderKpiTilesHtml`/`renderStatTileHtml`
+  render plain stat tiles (no Chart.js); `kpiTableData` reshapes `KpiItem[]`
+  into `TableData` so the Bar/Pie alternatives reuse `chart-view.ts`'s
+  `mountChart` rather than bespoke configs, same pattern as
+  `tasklist-view.ts`'s donut reuse. The Gauge view is a Chart.js `doughnut`
+  hack (`circumference: 180`, `rotation: 270`, `cutout: '75%'`) with a
+  two-segment dataset (`[value, max - value]`) and a small inline plugin
+  (`gaugeCenterTextPlugin`) drawing the formatted value in the arc's center via
+  `afterDraw`, since Chart.js has no built-in gauge type or center-text
+  support. The gauge's `max` isn't in the source Markdown, so it's inferred
+  (decided this increment, no prior source): a `%` value maxes at 100;
+  otherwise the next power of ten strictly above the value (minimum 10).
+  Gauges are tracked in their own `Map<heading, Chart>`
+  (`destroyGauge`/`destroyAllGauges`), separate from `chart-view.ts`'s map, so
+  `main.ts`'s `mountActiveView` clears both on every view switch/rebuild —
+  necessary because a card's canvas is always replaced on toggle, so whichever
+  map still references the old (now detached) canvas would otherwise leak.
 - **`src/widgets/chart-view.ts`** (present, Increment 7; more widget modules
   land in Increments 8–10) — client-side Chart.js integration. Registers
   Chart.js's `registerables` once, then `mountChart(heading, canvas, table,
@@ -140,8 +176,24 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   `taskDonutData(card.tasks)` instead of `card.table`). Both task views
   render the same per-item checklist (`renderTaskItemsHtml`) below the
   aggregate, so each milestone's individual state stays visible next to the
-  percentage. One icon button per view renders top-right of the
-  card. The selected view id is looked up/stored in `localStorage` keyed by
+  percentage. If `card.kpi` is set (Increment 9), three more entries are
+  appended: `kind: 'kpi-tiles'` (`kpi-view.ts`'s `renderKpiTilesHtml`, plain
+  HTML, no canvas), `kind: 'kpi-bar'`/`'kpi-pie'` (chart-container mounted via
+  `mountChart(heading, canvas, kpiTableData(card.kpi), 'bar' | 'pie')`, reusing
+  `chart-view.ts` the same way the progress-donut view does). If `card.metric`
+  is set instead (mutually exclusive with `card.kpi`), one `kind: 'gauge'`
+  entry is appended, mounted via `kpi-view.ts`'s `mountGauge`. `card.metric`
+  also changes what the **`default`** view itself renders: `renderCardBody`
+  special-cases `viewId === 'default' && card.metric` to
+  `renderStatTileHtml(card.metric)` instead of `card.html` — per
+  `ELEMENTS.md`, a lone `Metric: value` line's default widget is already a
+  stat tile, not the plain-text render every other element's default is (the
+  same way a table's default already renders the `<table>` itself).
+  `mountActiveView` clears **both** `chart-view.ts`'s and `kpi-view.ts`'s
+  chart maps (`destroyChart`/`destroyGauge`) unconditionally before mounting
+  the active view's chart (if any), since a card's canvas element is replaced
+  on every toggle regardless of which map it was tracked in. One icon button
+  per view renders top-right of the card. The selected view id is looked up/stored in `localStorage` keyed by
   `md-dashboard:view:<heading>`, so it survives both a live-reload push and a
   full page reload; a card's heading is assumed unique within a document (not
   enforced). A single delegated `click` listener on `#content` handles every
@@ -187,9 +239,11 @@ Two independent TypeScript builds share `src/` but never mix:
   `@types/node`) type-checks `src/main.ts` + `src/style.css`'s imports; `vite
   build` does the actual bundling into `dist/` (the shell the server serves).
   `src/cli.ts`, `src/server/`, and `src/parser/` are excluded from this
-  config (they run server-side only); `src/widgets/chart-view.ts` is
-  browser-only and stays in it, so it re-declares its own `ChartType`/
-  `TableData` types rather than importing `src/parser/table.ts`'s.
+  config (they run server-side only); `src/widgets/chart-view.ts` and
+  `src/widgets/kpi-view.ts` are browser-only and stay in it, so `kpi-view.ts`
+  re-declares its own `KpiItem` type rather than importing
+  `src/parser/kpi.ts`'s, same as `chart-view.ts` does for `ChartType`/
+  `TableData`.
 - **CLI/server bundle** — `tsconfig.server.json` (Node lib + types,
   `NodeNext` module resolution) compiles `src/cli.ts`, `src/server/**`, and
   `src/parser/**` to `dist-server/`. `bin/md-dashboard.js` is a plain JS
@@ -234,7 +288,14 @@ Two independent TypeScript builds share `src/` but never mix:
   milestone's individual checkbox state; the progress-donut view mounts a
   chart alongside the same per-item checklist; a task-less card offers no
   progress toggles; and the chosen progress view survives a full page
-  reload.
+  reload; `kpi.spec.ts` serves `tests/fixtures/kpi.md` (a three-item numeric
+  list, a lone `Metric: 99.9%` line, and a number-less prose section) to
+  verify: the numeric list defaults to the plain list text and offers
+  KPI-tiles/Bar/Pie, with the tiles view showing all three labels/values; the
+  Bar and Pie views each mount a canvas; the lone metric line defaults to a
+  stat tile (not plain text) and offers a Gauge that mounts a canvas; the
+  number-less card offers no KPI/Gauge toggles; and the chosen KPI view
+  survives a full page reload.
 
 ## Source of truth
 
