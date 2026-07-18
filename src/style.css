@@ -119,6 +119,44 @@ h1 {
   height: 280px;
 }
 
+.chart-container-small {
+  height: 160px;
+}
+
+.progress-bar {
+  height: 0.6rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--series-1);
+  border-radius: inherit;
+}
+
+.progress-label {
+  margin: 0.4rem 0 0.75rem;
+  font-size: 0.9rem;
+  color: var(--chart-text-secondary);
+}
+
+.task-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.task-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
 @media (prefers-color-scheme: light) {
   :root {
     color: #213547;
@@ -153,5 +191,9 @@ h1 {
   .toggle-btn[aria-pressed='true'] {
     background: rgba(33, 53, 71, 0.12);
     border-color: rgba(33, 53, 71, 0.3);
+  }
+
+  .progress-bar {
+    background: rgba(33, 53, 71, 0.12);
   }
 }

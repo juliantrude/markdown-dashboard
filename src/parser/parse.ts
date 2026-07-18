@@ -1,6 +1,7 @@
 import MarkdownIt from 'markdown-it'
 import Token from 'markdown-it/lib/token.mjs'
 import { extractTableData, validChartTypes, type ChartType, type TableData } from './table.js'
+import { extractTaskItems, type TaskItem } from './tasklist.js'
 
 const md: MarkdownIt = new MarkdownIt({ html: false })
 
@@ -14,6 +15,8 @@ export interface Card {
   table?: TableData
   /** Chart types valid for `table`'s shape, per ELEMENTS.md ("only alternatives valid for the data shape"). */
   chartTypes?: ChartType[]
+  /** Task-list items (`- [ ]`/`- [x]`) found anywhere in the card, if any (Increment 8). */
+  tasks?: TaskItem[]
 }
 
 export interface ParsedDocument {
@@ -82,9 +85,10 @@ export function parseDocument(markdown: string): ParsedDocument {
       const html = md.renderer.render(currentTokens, md.options, {})
       const table = extractTableData(currentTokens) ?? undefined
       const chartTypes = table ? validChartTypes(table) : undefined
+      const tasks = extractTaskItems(currentTokens)
       markCheckboxes(currentTokens)
       const markdownHtml = md.renderer.render(currentTokens, md.options, {})
-      cards.push({ heading: currentHeading, html, markdownHtml, table, chartTypes })
+      cards.push({ heading: currentHeading, html, markdownHtml, table, chartTypes, tasks })
     }
     currentHeading = null
     currentTokens = []

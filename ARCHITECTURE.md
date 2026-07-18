@@ -19,9 +19,10 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   document to all open sockets. Never writes to the target file. The payload
   is `{ type: 'content', title: string, cards: Card[] }` — `title`/`cards`
   come straight from `src/parser/parse.ts`; `Card` is `{ heading, html,
-  markdownHtml, table?, chartTypes? }` (`table`/`chartTypes` only present when
-  the card's first table yields chartable data — see `src/parser/table.ts`
-  below).
+  markdownHtml, table?, chartTypes?, tasks? }` (`table`/`chartTypes` only
+  present when the card's first table yields chartable data — see
+  `src/parser/table.ts` below; `tasks` only present when the card contains
+  `- [ ]`/`- [x]` items — see `src/parser/tasklist.ts` below).
 - **`src/server/open-browser.ts`** (present) — best-effort cross-platform
   "open the default URL in the browser", swallowing failures (headless/CI
   environments) since the URL is always printed too.
@@ -43,8 +44,10 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   rendered a second time after `markCheckboxes()` mutates `- [ ]`/`- [x]`
   list items into real, disabled `<input type="checkbox">` elements). `html`
   is always rendered *before* the mutation runs, since both renders share one
-  token array. It also calls `src/parser/table.ts`'s `extractTableData` on
-  the same (pre-mutation) tokens to look for the card's first table.
+  token array. It also calls `src/parser/table.ts`'s `extractTableData` and
+  `src/parser/tasklist.ts`'s `extractTaskItems` on the same (pre-mutation)
+  tokens, to look for the card's first table and any task-list items
+  respectively — both must run before `markCheckboxes` for the same reason.
 - **`src/parser/table.ts`** (present, Increment 7) — server-side table→chart
   extraction. `extractTableData` walks a card's token stream for the first
   `table_open`…`table_close` block, takes the first column as `categories`
@@ -63,6 +66,27 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   - `radar` — needs 3+ categories (axes).
   - `scatter` — needs 2+ numeric series (only the first two are plotted,
     as an x/y pair).
+- **`src/parser/tasklist.ts`** (present, Increment 8) — server-side
+  task-list extraction. `extractTaskItems` scans a card's token stream for
+  every `inline` token whose raw source starts with a `- [ ]`/`- [x]`
+  marker (same regex as `markCheckboxes`, run first on the unmutated
+  tokens) and returns `{ html, done }[]` — `html` is the item's label
+  re-rendered via `md.renderInline` (so bold/links/etc. survive), marker
+  stripped; `done` from the bracket's `x`/`X`. Items are collected wherever
+  they appear in the card (nesting isn't distinguished), and the function
+  returns `undefined` rather than an empty array when the card has none, so
+  `Card.tasks` can double as the "does this card have a task list" check.
+- **`src/widgets/tasklist-view.ts`** (present, Increment 8) — client-side
+  progress-bar/donut rendering for `Card.tasks`. `taskProgress` computes
+  `{ done, total, percent }`; `taskDonutData` reshapes that into a
+  two-category `TableData` (`Done`/`Open` counts) so the donut view can
+  reuse `chart-view.ts`'s existing `mountChart(..., 'donut')` builder rather
+  than a bespoke chart config — the categorical palette's slot 1/2 colors
+  the two segments, same as any other donut. `renderTaskItemsHtml` renders
+  the same per-item checklist (real, disabled checkboxes) under both the bar
+  and donut views, since `ELEMENTS.md` requires each milestone's individual
+  done/open state to stay visible alongside the aggregate, never a bare
+  percentage.
 - **`src/widgets/chart-view.ts`** (present, Increment 7; more widget modules
   land in Increments 8–10) — client-side Chart.js integration. Registers
   Chart.js's `registerables` once, then `mountChart(heading, canvas, table,
@@ -72,7 +96,10 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   card heading so it can be `destroy()`-ed before the canvas is replaced —
   `destroyAllCharts()` clears every tracked chart ahead of a full-grid
   rebuild (live reload), `destroyChart(heading)` clears one when a single
-  card's toggle switches away from a chart view. Colors come from the
+  card's toggle switches away from a chart view (this also covers the
+  Increment 8 progress-donut view, which mounts a `'donut'` chart built from
+  `tasklist-view.ts`'s reshaped task data rather than a card's table).
+  Colors come from the
   dataviz skill's validated 8-slot categorical palette (fixed order, never
   cycled — past 8 series/categories `foldToOther` sums the rest into a
   trailing "Other" slot), read at mount time from the `--series-1..8` /
@@ -97,14 +124,23 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   on each `content` message, sets `#doc-title` and rebuilds `#content` as one
   `.card` per section: a `.card-header` (heading + toggle) and a
   `.card-body`. **Widget toggle framework (present, Increment 6; extended
-  Increment 7):** each card builds a small `WidgetView[]` — always `default`
-  → `card.html` and `markdown` → `card.markdownHtml`, plus (Increment 7) one
-  entry per `card.chartTypes[]` id, rendered as `<div class="chart-container">
+  Increments 7-8):** each card builds a small `WidgetView[]` (each carrying a
+  `kind` discriminant) — always `default` to `card.html` and `markdown` to
+  `card.markdownHtml`, plus (Increment 7) one `kind: 'chart'` entry per
+  `card.chartTypes[]` id, rendered as `<div class="chart-container">
   <canvas></canvas></div>` and mounted via `chart-view.ts`'s `mountChart`
   right after that HTML lands in the DOM (`mountActiveView`, called from both
   the full-grid rebuild and the toggle click handler) — Chart.js needs a live
   canvas element, so chart views can't be pure HTML strings the way
-  `default`/`markdown` are. One icon button per view renders top-right of the
+  `default`/`markdown` are. If `card.tasks` is non-empty (Increment 8), two
+  more entries are appended: `kind: 'progress-bar'` (a CSS progress bar +
+  percentage label from `tasklist-view.ts`'s `renderProgressBarHtml`) and
+  `kind: 'progress-donut'` (a chart-container mounted as a `'donut'` chart via
+  the same `mountChart`/`mountActiveView` path as table charts, fed
+  `taskDonutData(card.tasks)` instead of `card.table`). Both task views
+  render the same per-item checklist (`renderTaskItemsHtml`) below the
+  aggregate, so each milestone's individual state stays visible next to the
+  percentage. One icon button per view renders top-right of the
   card. The selected view id is looked up/stored in `localStorage` keyed by
   `md-dashboard:view:<heading>`, so it survives both a live-reload push and a
   full page reload; a card's heading is assumed unique within a document (not
@@ -120,9 +156,10 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   light` block). `.card-header`/`.card-toggle` wrap (`flex-wrap: wrap`) since
   Increment 7 pushed a card's toggle row up to 8 buttons wide, which
   overflowed a 280px card and visually spilled into the next grid column
-  before this was added (caught by `tests/table.spec.ts`, not by eye). Will
-  grow to cover explicit breakpoints and a manual light/dark toggle
-  (Increment 11).
+  before this was added (caught by `tests/table.spec.ts`, not by eye). Also
+  has the Increment 8 `.progress-bar`/`.progress-bar-fill`/`.task-list`/
+  `.task-item` rules for the progress-bar/donut views. Will grow to cover
+  explicit breakpoints and a manual light/dark toggle (Increment 11).
 
 ## Live-reload flow
 
@@ -190,7 +227,14 @@ Two independent TypeScript builds share `src/` but never mix:
   Grouped/Stacked Bar or Scatter and a canvas mounts on toggle; the
   two-series table offers Grouped Bar/Stacked Bar/Scatter but not plain
   Bar/Pie; a table-less card offers no chart toggles at all; and the chosen
-  chart view survives a full page reload, same as `widgets.spec.ts`.
+  chart view survives a full page reload, same as `widgets.spec.ts`;
+  `tasklist.spec.ts` serves `tests/fixtures/tasklist.md` (a 4-item mixed task
+  list, 2 done/2 open, plus a task-less prose section) to verify: the
+  progress-bar view shows the correct percentage (50%, 2/4) and every
+  milestone's individual checkbox state; the progress-donut view mounts a
+  chart alongside the same per-item checklist; a task-less card offers no
+  progress toggles; and the chosen progress view survives a full page
+  reload.
 
 ## Source of truth
 

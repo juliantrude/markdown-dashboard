@@ -1,5 +1,6 @@
 import './style.css'
 import { CHART_VIEW_META, destroyAllCharts, destroyChart, mountChart, type ChartType, type TableData } from './widgets/chart-view.js'
+import { renderProgressBarHtml, renderTaskItemsHtml, taskDonutData, type TaskItem } from './widgets/tasklist-view.js'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div class="dashboard">
@@ -18,6 +19,7 @@ interface Card {
   markdownHtml: string
   table?: TableData
   chartTypes?: ChartType[]
+  tasks?: TaskItem[]
 }
 
 interface ContentMessage {
@@ -36,25 +38,32 @@ function isContentMessage(value: unknown): value is ContentMessage {
   )
 }
 
-// Per-card widget view toggle. Increments 8-10 will register more view ids
-// (progress, KPI, ...); every card offers its default widget render and the
-// faithful "Markdown" raw-render mode, plus (Increment 7) one entry per chart
-// type valid for the card's table, if it has one.
+// Per-card widget view toggle. Increments 9-10 will register more view ids
+// (KPI, ...); every card offers its default widget render and the faithful
+// "Markdown" raw-render mode, plus (Increment 7) one entry per chart type
+// valid for the card's table, and (Increment 8) a progress bar/donut pair if
+// the card has task-list items.
+type WidgetKind = 'default' | 'markdown' | 'chart' | 'progress-bar' | 'progress-donut'
+
 interface WidgetView {
   id: string
   label: string
   icon: string
-  isChart: boolean
+  kind: WidgetKind
 }
 
 function viewsFor(card: Card): WidgetView[] {
   const views: WidgetView[] = [
-    { id: 'default', label: 'Widget', icon: '▦', isChart: false },
-    { id: 'markdown', label: 'Markdown', icon: '▤', isChart: false },
+    { id: 'default', label: 'Widget', icon: '▦', kind: 'default' },
+    { id: 'markdown', label: 'Markdown', icon: '▤', kind: 'markdown' },
   ]
   for (const chartType of card.chartTypes ?? []) {
     const meta = CHART_VIEW_META[chartType]
-    views.push({ id: chartType, label: meta.label, icon: meta.icon, isChart: true })
+    views.push({ id: chartType, label: meta.label, icon: meta.icon, kind: 'chart' })
+  }
+  if (card.tasks?.length) {
+    views.push({ id: 'progress-bar', label: 'Progress bar', icon: '▬', kind: 'progress-bar' })
+    views.push({ id: 'progress-donut', label: 'Progress donut', icon: '🍩', kind: 'progress-donut' })
   }
   return views
 }
@@ -75,7 +84,13 @@ function renderCardBody(card: Card, viewId: string): string {
   if (viewId === 'markdown') return card.markdownHtml
   const views = viewsFor(card)
   const active = views.find((view) => view.id === viewId)
-  if (active?.isChart) return '<div class="chart-container"><canvas></canvas></div>'
+  if (active?.kind === 'chart') return '<div class="chart-container"><canvas></canvas></div>'
+  if (active?.kind === 'progress-bar' && card.tasks) {
+    return `<div class="task-progress">${renderProgressBarHtml(card.tasks)}${renderTaskItemsHtml(card.tasks)}</div>`
+  }
+  if (active?.kind === 'progress-donut' && card.tasks) {
+    return `<div class="task-progress"><div class="chart-container chart-container-small"><canvas></canvas></div>${renderTaskItemsHtml(card.tasks)}</div>`
+  }
   return card.html
 }
 
@@ -83,9 +98,12 @@ function renderCardBody(card: Card, viewId: string): string {
 function mountActiveView(card: Card, viewId: string, bodyEl: HTMLElement): void {
   const views = viewsFor(card)
   const active = views.find((view) => view.id === viewId)
-  if (active?.isChart && card.table) {
+  if (active?.kind === 'chart' && card.table) {
     const canvas = bodyEl.querySelector('canvas')!
     mountChart(card.heading, canvas, card.table, active.id as ChartType)
+  } else if (active?.kind === 'progress-donut' && card.tasks) {
+    const canvas = bodyEl.querySelector('canvas')!
+    mountChart(card.heading, canvas, taskDonutData(card.tasks), 'donut')
   } else {
     destroyChart(card.heading)
   }
