@@ -189,6 +189,23 @@ h1 {
   gap: 0.4rem;
 }
 
+.mermaid-container {
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+}
+
+.mermaid-container svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-error {
+  margin: 0;
+  color: var(--series-3);
+  font-size: 0.9rem;
+}
+
 @media (prefers-color-scheme: light) {
   :root {
     color: #213547;

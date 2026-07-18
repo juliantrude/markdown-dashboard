@@ -3,6 +3,8 @@ import Token from 'markdown-it/lib/token.mjs'
 import { extractTableData, validChartTypes, type ChartType, type TableData } from './table.js'
 import { extractTaskItems, type TaskItem } from './tasklist.js'
 import { extractKpiListItems, extractSingleMetric, type KpiItem } from './kpi.js'
+import { extractMermaidSource } from './mermaid.js'
+import { extractChartFence, type ChartFence } from './chartfence.js'
 
 const md: MarkdownIt = new MarkdownIt({ html: false })
 
@@ -22,6 +24,10 @@ export interface Card {
   kpi?: KpiItem[]
   /** A lone `Key: value` numeric paragraph, if the card has no list and exactly one such line (Increment 9). Mutually exclusive with `kpi`. */
   metric?: KpiItem
+  /** Raw source of the card's first ` ```mermaid ` fence, if any (Increment 10). */
+  mermaid?: string
+  /** The card's first ` ```chart ` fence, parsed into chart-ready data, if its config is valid (Increment 10). */
+  chartFence?: ChartFence
 }
 
 export interface ParsedDocument {
@@ -93,9 +99,11 @@ export function parseDocument(markdown: string): ParsedDocument {
       const tasks = extractTaskItems(currentTokens)
       const kpi = extractKpiListItems(currentTokens)
       const metric = kpi ? undefined : extractSingleMetric(currentTokens)
+      const mermaid = extractMermaidSource(currentTokens)
+      const chartFence = extractChartFence(currentTokens)
       markCheckboxes(currentTokens)
       const markdownHtml = md.renderer.render(currentTokens, md.options, {})
-      cards.push({ heading: currentHeading, html, markdownHtml, table, chartTypes, tasks, kpi, metric })
+      cards.push({ heading: currentHeading, html, markdownHtml, table, chartTypes, tasks, kpi, metric, mermaid, chartFence })
     }
     currentHeading = null
     currentTokens = []

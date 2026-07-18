@@ -19,12 +19,16 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   document to all open sockets. Never writes to the target file. The payload
   is `{ type: 'content', title: string, cards: Card[] }` — `title`/`cards`
   come straight from `src/parser/parse.ts`; `Card` is `{ heading, html,
-  markdownHtml, table?, chartTypes?, tasks?, kpi?, metric? }`
+  markdownHtml, table?, chartTypes?, tasks?, kpi?, metric?, mermaid?,
+  chartFence? }`
   (`table`/`chartTypes` only present when the card's first table yields
   chartable data — see `src/parser/table.ts` below; `tasks` only present when
   the card contains `- [ ]`/`- [x]` items — see `src/parser/tasklist.ts`
   below; `kpi`/`metric` only present for a numeric list / lone `Metric: value`
-  line respectively, mutually exclusive — see `src/parser/kpi.ts` below).
+  line respectively, mutually exclusive — see `src/parser/kpi.ts` below;
+  `mermaid` only present for a ```` ```mermaid ```` fence and `chartFence`
+  only present for a valid ```` ```chart ```` fence — see `src/parser/mermaid.ts`
+  and `src/parser/chartfence.ts` below).
 - **`src/server/open-browser.ts`** (present) — best-effort cross-platform
   "open the default URL in the browser", swallowing failures (headless/CI
   environments) since the URL is always printed too.
@@ -123,6 +127,51 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   `main.ts`'s `mountActiveView` clears both on every view switch/rebuild —
   necessary because a card's canvas is always replaced on toggle, so whichever
   map still references the old (now detached) canvas would otherwise leak.
+- **`src/parser/mermaid.ts`** (present, Increment 10) — server-side
+  extraction of a card's first ```` ```mermaid ```` fenced code block's raw
+  source (`token.info`'s first whitespace-separated word, case-insensitively
+  `mermaid`). Per `ELEMENTS.md` a mermaid fence has no switchable chart
+  alternatives, so this is the only extraction its widget needs — the
+  faithful "Markdown" raw-render mode is already correct without any special
+  handling, since `markdownHtml` renders the untouched fence as a plain code
+  block.
+- **`src/parser/chartfence.ts`** (present, Increment 10) — server-side
+  extraction/validation of a card's first ```` ```chart ```` fenced code
+  block. The config schema was invented this increment (no prior source):
+  `{ type?: string, categories: string[], series: { label: string, data:
+  number[] }[] }`, parsed as JSON first and falling back to YAML (the `yaml`
+  package, chosen over `js-yaml` for no native deps and an Node-18-compatible
+  engine range) since JSON is a YAML subset and trying JSON first avoids
+  YAML's laxer parsing masking a JSON typo. Malformed config (bad JSON/YAML,
+  missing/mismatched-length arrays, non-numeric data) returns `undefined` —
+  the card falls back to its plain fenced-code default render, the same
+  "only alternatives valid for the data shape" rule `table.ts`'s column
+  rejection already follows. Reuses `table.ts`'s `validChartTypes` on the
+  parsed `TableData` (a fence's data is shaped identically to a table's, so
+  no separate shape-validity ladder was needed); `type`, if given and valid
+  for the shape, becomes `defaultType`, otherwise the first valid type does.
+  `types` in the returned `ChartFence` holds only the *alternatives* (valid
+  types minus `defaultType`) since the default type is rendered by the
+  `default` view itself, not offered a second time as a toggle option.
+- **`src/widgets/mermaid-view.ts`** (present, Increment 10) — client-side
+  `mermaid@^11` integration. `mermaid.initialize` runs once at module load
+  with `theme: 'dark' | 'default'` picked from
+  `matchMedia('(prefers-color-scheme: dark)')` — a one-time best-effort
+  match, not a live sync with the manual light/dark toggle Increment 11 adds.
+  `mountMermaid(heading, container, source)` calls `mermaid.render(id,
+  source)` (async — needs a live container, so it's invoked from
+  `mountActiveView` the same way Chart.js chart mounts are, but fire-and-forget
+  since there's no synchronous chart-map bookkeeping to do first) and injects
+  the resulting SVG; a parse error renders `.mermaid-error` text instead of
+  throwing, since a syntax mistake in the user's own Markdown must never
+  crash the dashboard. **Bug caught by `tests/mermaid-chart.spec.ts`, not by
+  eye:** `mermaid.render()` stages its output in a hidden `#d<id>` div it
+  appends directly to `<body>` and removes itself once the SVG is extracted
+  — but only on the success path. On a parse error that cleanup never runs,
+  leaving mermaid's own large error-diagram SVG (bomb icon + "Syntax error in
+  text") floating outside the card grid entirely, below the whole dashboard.
+  Fixed with a `finally` block that removes `#d<id>` unconditionally after
+  every render call, success or failure.
 - **`src/widgets/chart-view.ts`** (present, Increment 7; more widget modules
   land in Increments 8–10) — client-side Chart.js integration. Registers
   Chart.js's `registerables` once, then `mountChart(heading, canvas, table,
@@ -192,8 +241,25 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   `mountActiveView` clears **both** `chart-view.ts`'s and `kpi-view.ts`'s
   chart maps (`destroyChart`/`destroyGauge`) unconditionally before mounting
   the active view's chart (if any), since a card's canvas element is replaced
-  on every toggle regardless of which map it was tracked in. One icon button
-  per view renders top-right of the card. The selected view id is looked up/stored in `localStorage` keyed by
+  on every toggle regardless of which map it was tracked in. If `card.chartFence`
+  is set (Increment 10), one `kind: 'chart'` entry per alternative type in
+  `card.chartFence.types` is appended with an id prefixed `fence-` (e.g.
+  `fence-pie`) rather than the bare type id `card.chartTypes` entries use —
+  a card could in principle have both a real table and a chart fence, and
+  the prefix keeps their view ids from colliding. `card.chartFence` also
+  changes what the **`default`** view renders, the same special-casing
+  pattern as `card.metric`: unless the card also has a real `card.table`
+  (whose own default — the plain `<table>` — takes priority), `default`
+  mounts the fence's own `defaultType` as a chart rather than showing the
+  raw fence text. If `card.mermaid` is set (Increment 10), there are no
+  extra toggle entries at all — only `default` is special-cased, to a
+  `<div class="mermaid-container">` mounted asynchronously via
+  `mermaid-view.ts`'s `mountMermaid` (fire-and-forget from
+  `mountActiveView`, since `mermaid.render` is a promise and the rest of the
+  mount pipeline is synchronous); the "Markdown" view needs no special
+  handling since `card.markdownHtml` already renders the untouched fence as
+  a plain code block. One icon button per view renders top-right of the
+  card. The selected view id is looked up/stored in `localStorage` keyed by
   `md-dashboard:view:<heading>`, so it survives both a live-reload push and a
   full page reload; a card's heading is assumed unique within a document (not
   enforced). A single delegated `click` listener on `#content` handles every
@@ -210,8 +276,12 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   overflowed a 280px card and visually spilled into the next grid column
   before this was added (caught by `tests/table.spec.ts`, not by eye). Also
   has the Increment 8 `.progress-bar`/`.progress-bar-fill`/`.task-list`/
-  `.task-item` rules for the progress-bar/donut views. Will grow to cover
-  explicit breakpoints and a manual light/dark toggle (Increment 11).
+  `.task-item` rules for the progress-bar/donut views, and the Increment 10
+  `.mermaid-container`/`.mermaid-error` rules (the former centers the SVG and
+  scrolls horizontally rather than clipping an oversized diagram; the latter
+  colors the inline parse-error message with the palette's slot-3 hue). Will
+  grow to cover explicit breakpoints and a manual light/dark toggle
+  (Increment 11).
 
 ## Live-reload flow
 
@@ -295,7 +365,18 @@ Two independent TypeScript builds share `src/` but never mix:
   Bar and Pie views each mount a canvas; the lone metric line defaults to a
   stat tile (not plain text) and offers a Gauge that mounts a canvas; the
   number-less card offers no KPI/Gauge toggles; and the chosen KPI view
-  survives a full page reload.
+  survives a full page reload; `mermaid-chart.spec.ts` serves
+  `tests/fixtures/diagrams.md` (a mermaid flowchart, an explicit `bar` chart
+  fence with 3 categories/1 series, a deliberately invalid mermaid fence, and
+  a fence-less prose section) to verify: the flowchart's default view is a
+  rendered `<svg>` and it offers no toggle beyond default/markdown; the
+  invalid diagram shows an inline `.mermaid-error` message and — the
+  regression check for the bug below — leaves no orphaned `#dmermaid-*`
+  staging element on `<body>`; the chart fence's default view is already the
+  declared `bar` chart (not raw config text) and offers the other
+  shape-valid types (`fence-line`/`fence-pie`/`fence-radar`, etc.) as
+  `fence-`-prefixed toggles, each mounting a canvas and surviving a reload;
+  and the fence-less card offers no diagram/chart toggles at all.
 
 ## Source of truth
 

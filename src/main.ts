@@ -10,6 +10,7 @@ import {
   renderStatTileHtml,
   type KpiItem,
 } from './widgets/kpi-view.js'
+import { mountMermaid } from './widgets/mermaid-view.js'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div class="dashboard">
@@ -31,6 +32,8 @@ interface Card {
   tasks?: TaskItem[]
   kpi?: KpiItem[]
   metric?: KpiItem
+  mermaid?: string
+  chartFence?: { table: TableData; defaultType: ChartType; types: ChartType[] }
 }
 
 interface ContentMessage {
@@ -49,14 +52,19 @@ function isContentMessage(value: unknown): value is ContentMessage {
   )
 }
 
-// Per-card widget view toggle. Increment 10 will register more view ids
-// (mermaid/chart fences); every card offers its default widget render and the
-// faithful "Markdown" raw-render mode, plus (Increment 7) one entry per chart
-// type valid for the card's table, (Increment 8) a progress bar/donut pair if
-// the card has task-list items, and (Increment 9) KPI tiles/Bar/Pie for a
-// numeric list, or a Gauge for a lone `Metric: value` (whose "default" view
-// renders a stat tile, not plain text — ELEMENTS.md's only element so far
-// where the default widget isn't the plain markdown-it render).
+// Per-card widget view toggle. Every card offers its default widget render
+// and the faithful "Markdown" raw-render mode, plus (Increment 7) one entry
+// per chart type valid for the card's table, (Increment 8) a progress
+// bar/donut pair if the card has task-list items, (Increment 9) KPI
+// tiles/Bar/Pie for a numeric list or a Gauge for a lone `Metric: value`
+// (whose "default" view renders a stat tile, not plain text), and
+// (Increment 10) one entry per alternative chart type for a ```chart fence
+// (`fence-<type>` ids, since a card could in principle also have a real
+// table with overlapping type ids) — its "default" view renders the fence's
+// own default type as a chart, same non-plain-text-default pattern as the
+// lone metric. A ```mermaid fence has no alternatives at all: only its
+// "default" view is special-cased (to the rendered diagram, mounted
+// async via mermaid.render — see mountActiveView).
 type WidgetKind = 'default' | 'markdown' | 'chart' | 'progress-bar' | 'progress-donut' | 'kpi-tiles' | 'kpi-bar' | 'kpi-pie' | 'gauge'
 
 interface WidgetView {
@@ -86,6 +94,10 @@ function viewsFor(card: Card): WidgetView[] {
   }
   if (card.metric) {
     views.push({ id: 'gauge', label: 'Gauge', icon: '⏱', kind: 'gauge' })
+  }
+  for (const chartType of card.chartFence?.types ?? []) {
+    const meta = CHART_VIEW_META[chartType]
+    views.push({ id: `fence-${chartType}`, label: meta.label, icon: meta.icon, kind: 'chart' })
   }
   return views
 }
@@ -123,6 +135,15 @@ function renderCardBody(card: Card, viewId: string): string {
   // ELEMENTS.md: a lone `Metric: value` line's *default* widget is already a
   // stat tile, not the plain paragraph text every other element's "default" is.
   if (viewId === 'default' && card.metric) return renderStatTileHtml(card.metric)
+  // A ```chart fence's *default* view is the explicit chart itself, not the
+  // raw config text — unless the card also has a real table, whose own
+  // default (the `<table>` in card.html) takes priority.
+  if (viewId === 'default' && card.chartFence && !card.table) {
+    return '<div class="chart-container"><canvas></canvas></div>'
+  }
+  // A ```mermaid fence's *default* view is the rendered diagram; mounted
+  // async in mountActiveView since mermaid.render needs a live container.
+  if (viewId === 'default' && card.mermaid) return '<div class="mermaid-container"></div>'
   return card.html
 }
 
@@ -133,7 +154,11 @@ function mountActiveView(card: Card, viewId: string, bodyEl: HTMLElement): void 
   destroyChart(card.heading)
   destroyGauge(card.heading)
   const canvas = bodyEl.querySelector('canvas')
-  if (active?.kind === 'chart' && card.table) {
+  if (viewId === 'default' && card.chartFence && !card.table) {
+    mountChart(card.heading, canvas!, card.chartFence.table, card.chartFence.defaultType)
+  } else if (active?.kind === 'chart' && card.chartFence && viewId.startsWith('fence-')) {
+    mountChart(card.heading, canvas!, card.chartFence.table, viewId.slice('fence-'.length) as ChartType)
+  } else if (active?.kind === 'chart' && card.table) {
     mountChart(card.heading, canvas!, card.table, active.id as ChartType)
   } else if (active?.kind === 'progress-donut' && card.tasks) {
     mountChart(card.heading, canvas!, taskDonutData(card.tasks), 'donut')
@@ -143,6 +168,9 @@ function mountActiveView(card: Card, viewId: string, bodyEl: HTMLElement): void 
     mountChart(card.heading, canvas!, kpiTableData(card.kpi), 'pie')
   } else if (active?.kind === 'gauge' && card.metric) {
     mountGauge(card.heading, canvas!, card.metric)
+  } else if (viewId === 'default' && card.mermaid) {
+    const container = bodyEl.querySelector<HTMLElement>('.mermaid-container')
+    if (container) void mountMermaid(card.heading, container, card.mermaid)
   }
 }
 
