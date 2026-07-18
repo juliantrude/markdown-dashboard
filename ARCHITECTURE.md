@@ -28,7 +28,14 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   line respectively, mutually exclusive — see `src/parser/kpi.ts` below;
   `mermaid` only present for a ```` ```mermaid ```` fence and `chartFence`
   only present for a valid ```` ```chart ```` fence — see `src/parser/mermaid.ts`
-  and `src/parser/chartfence.ts` below).
+  and `src/parser/chartfence.ts` below). `parseDocument` is wrapped in a
+  `safeParse` that catches and logs rather than propagating (Increment 11):
+  the target file is user input edited outside this process, a system
+  boundary, so a parse failure (or a read mid-save) must never crash the
+  server or the watcher — on failure, no message is sent and whatever was
+  last broadcast keeps showing. A well-formed but section-less document (no
+  `##` cards) is not an error — it's sent normally with `cards: []`, and the
+  client renders a friendly empty state instead of a blank grid.
 - **`src/server/open-browser.ts`** (present) — best-effort cross-platform
   "open the default URL in the browser", swallowing failures (headless/CI
   environments) since the URL is always printed too.
@@ -153,12 +160,14 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   `types` in the returned `ChartFence` holds only the *alternatives* (valid
   types minus `defaultType`) since the default type is rendered by the
   `default` view itself, not offered a second time as a toggle option.
-- **`src/widgets/mermaid-view.ts`** (present, Increment 10) — client-side
-  `mermaid@^11` integration. `mermaid.initialize` runs once at module load
-  with `theme: 'dark' | 'default'` picked from
-  `matchMedia('(prefers-color-scheme: dark)')` — a one-time best-effort
-  match, not a live sync with the manual light/dark toggle Increment 11 adds.
-  `mountMermaid(heading, container, source)` calls `mermaid.render(id,
+- **`src/widgets/mermaid-view.ts`** (present, Increment 10; theme sync added
+  Increment 11) — client-side `mermaid@^11` integration.
+  `setMermaidTheme('light' | 'dark')` calls `mermaid.initialize` with
+  `theme: 'default' | 'dark'`; `src/main.ts`'s theme module calls it both at
+  boot and on every manual toggle flip, then re-renders whatever's mounted
+  (mermaid has no live theme switch of its own — only the *next*
+  `mermaid.render()` call picks up a re-`initialize`). `mountMermaid(heading,
+  container, source)` calls `mermaid.render(id,
   source)` (async — needs a live container, so it's invoked from
   `mountActiveView` the same way Chart.js chart mounts are, but fire-and-forget
   since there's no synchronous chart-map bookkeeping to do first) and injects
@@ -189,8 +198,10 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   cycled — past 8 series/categories `foldToOther` sums the rest into a
   trailing "Other" slot), read at mount time from the `--series-1..8` /
   `--chart-text-*` / `--chart-grid` CSS custom properties in `src/style.css`
-  (light/dark values already switch with `prefers-color-scheme`, matching
-  the rest of the shell). Legend follows the skill's rule: shown whenever a
+  (light/dark values switch with the `data-theme` attribute — see Increment
+  11 below; since colors are read at mount time, not live-bound, a theme flip
+  re-renders every mounted card so its chart(s) pick up the new palette).
+  Legend follows the skill's rule: shown whenever a
   chart has 2+ series, and always for pie/donut (color there identifies the
   category, not a series). Chart lib decision, logged here since it was
   never made in Increments 1–2 as the North Star intended: **Chart.js** —
@@ -204,9 +215,31 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   configuration-first than this project needs.
 - **`src/main.ts`** (present) — client bootstrap; renders the static
   "Dashboard" shell (`<h1>`, unaffected by document content — see
-  `tests/smoke.spec.ts`), a `#doc-title` subtitle for the parsed `#` title,
-  and a `#content` grid container. Opens the `/ws` WebSocket connection and,
-  on each `content` message, sets `#doc-title` and rebuilds `#content` as one
+  `tests/smoke.spec.ts`), a `#theme-toggle` button beside it (Increment 11),
+  a `#doc-title` subtitle for the parsed `#` title, and a `#content` grid
+  container. **Theme module (present, Increment 11):** resolves the initial
+  theme from `localStorage`'s `md-dashboard:theme` override, falling back to
+  `matchMedia('(prefers-color-scheme: dark)')` — `index.html` runs the same
+  resolution inline, synchronously, before first paint, so there's no flash
+  of the wrong theme; this module just keeps `<html data-theme>` in sync
+  afterwards. Clicking `#theme-toggle` flips the theme, stores the override,
+  and calls `applyTheme`, which sets `data-theme`, re-`initialize`s mermaid's
+  theme (`mermaid-view.ts`'s `setMermaidTheme`), and — since neither Chart.js
+  colors nor a mounted mermaid SVG update live — re-renders the last-received
+  `content` message (`lastMessage`, cached from the WebSocket handler) so
+  every mounted chart/diagram redraws with the new palette. A
+  `matchMedia` `change` listener keeps following the system preference for as
+  long as no manual override is stored; a stored override always wins.
+  `storedViewId(card)` (renamed from taking a heading to taking the whole
+  `Card`) now clamps the persisted view id to one still valid for that card's
+  *current* `viewsFor(card)` shape, falling back to `'default'` — otherwise a
+  stored id that went stale (e.g. the underlying table lost a column and no
+  longer offers Scatter) would render with no toggle button showing as
+  pressed. If a `content` message has zero cards (no `##` sections in the
+  file — e.g. an empty file, or one that's all preamble), `renderCards`
+  shows a `.empty-state` message instead of an empty grid. Opens the `/ws`
+  WebSocket connection and, on each `content` message, sets `#doc-title` and
+  rebuilds `#content` as one
   `.card` per section: a `.card-header` (heading + toggle) and a
   `.card-body`. **Widget toggle framework (present, Increment 6; extended
   Increments 7-8):** each card builds a small `WidgetView[]` (each carrying a
@@ -267,21 +300,30 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   re-binding. Escaping is applied to the heading text only — card body HTML
   is already markdown-it's own escaped output.
 - **`src/style.css`** (present) — shell styling, including the responsive
-  `.dashboard-grid`/`.card` layout (`auto-fill`/`minmax` grid, no fixed
-  breakpoints yet) and the chart categorical palette as CSS custom
-  properties (`--series-1..8`, `--chart-text-primary/secondary`,
-  `--chart-grid`; light values under the existing `prefers-color-scheme:
-  light` block). `.card-header`/`.card-toggle` wrap (`flex-wrap: wrap`) since
-  Increment 7 pushed a card's toggle row up to 8 buttons wide, which
-  overflowed a 280px card and visually spilled into the next grid column
-  before this was added (caught by `tests/table.spec.ts`, not by eye). Also
-  has the Increment 8 `.progress-bar`/`.progress-bar-fill`/`.task-list`/
-  `.task-item` rules for the progress-bar/donut views, and the Increment 10
+  `.dashboard-grid`/`.card` layout (`auto-fill`/`minmax` grid; explicit
+  breakpoints added Increment 11 — `max-width: 640px` collapses to a single
+  column and tightens padding, `641–1024px` narrows the grid's `minmax` floor
+  so 2+ columns still fit, `>1024px` uses the base `minmax(280px, 1fr)`) and
+  the chart categorical palette as CSS custom properties (`--series-1..8`,
+  `--chart-text-primary/secondary`, `--chart-grid`). **Theming (Increment
+  11):** driven by `:root[data-theme='dark' | 'light']` attribute selectors,
+  not `@media (prefers-color-scheme)` — the dark block is `:root`'s default
+  variable values, the light block overrides them plus every
+  `rgba(255,255,255,…)` border/background used elsewhere (`.card`,
+  `.toggle-btn`, `.theme-toggle`, `.progress-bar`, `.kpi-tile`,
+  `.dashboard-subtitle`, `.empty-state`); `data-theme` itself is set by JS
+  (`index.html`'s inline boot script, then `src/main.ts`'s theme module), not
+  CSS, since a manual override must be able to beat the system preference.
+  `.card-header`/`.card-toggle` wrap (`flex-wrap: wrap`) since Increment 7
+  pushed a card's toggle row up to 8 buttons wide, which overflowed a 280px
+  card and visually spilled into the next grid column before this was added
+  (caught by `tests/table.spec.ts`, not by eye). Also has the Increment 8
+  `.progress-bar`/`.progress-bar-fill`/`.task-list`/`.task-item` rules for
+  the progress-bar/donut views, the Increment 10
   `.mermaid-container`/`.mermaid-error` rules (the former centers the SVG and
   scrolls horizontally rather than clipping an oversized diagram; the latter
-  colors the inline parse-error message with the palette's slot-3 hue). Will
-  grow to cover explicit breakpoints and a manual light/dark toggle
-  (Increment 11).
+  colors the inline parse-error message with the palette's slot-3 hue), and
+  the Increment 11 `.dashboard-header`/`.theme-toggle`/`.empty-state` rules.
 
 ## Live-reload flow
 
@@ -376,7 +418,16 @@ Two independent TypeScript builds share `src/` but never mix:
   declared `bar` chart (not raw config text) and offers the other
   shape-valid types (`fence-line`/`fence-pie`/`fence-radar`, etc.) as
   `fence-`-prefixed toggles, each mounting a canvas and surviving a reload;
-  and the fence-less card offers no diagram/chart toggles at all.
+  and the fence-less card offers no diagram/chart toggles at all;
+  `responsive-theme.spec.ts` serves `tests/fixtures/elements.md` (3 cards) to
+  verify: the theme defaults to `prefers-color-scheme` when no override is
+  stored (both light and dark, via `page.emulateMedia`); a manual
+  `#theme-toggle` click overrides the system preference and the override
+  survives a reload even if the system preference flips back; a 375px
+  viewport stacks the 3 cards into a single column and a 1280px viewport lays
+  the first two side by side; `empty-doc.spec.ts` serves
+  `tests/fixtures/empty.md` (a `#` title with no `##` sections) to verify the
+  dashboard shows a `.empty-state` message instead of a blank grid.
 
 ## Source of truth
 

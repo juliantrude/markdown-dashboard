@@ -1,10 +1,14 @@
 import mermaid from 'mermaid'
 
-// Theme is picked once at load from the browser's color-scheme preference —
-// there's no manual light/dark toggle yet (Increment 11), so this is a
-// best-effort match rather than a live-synced theme.
-const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-mermaid.initialize({ startOnLoad: false, theme: prefersDark ? 'dark' : 'default' })
+/**
+ * Re-initializes mermaid's theme. Mermaid has no live theme switch — the
+ * next `mountMermaid()` call after this picks up the new theme, so callers
+ * must also re-render any already-mounted diagrams (main.ts's theme toggle
+ * does a full card re-render for exactly this reason).
+ */
+export function setMermaidTheme(theme: 'light' | 'dark'): void {
+  mermaid.initialize({ startOnLoad: false, theme: theme === 'dark' ? 'dark' : 'default' })
+}
 
 let renderSeq = 0
 

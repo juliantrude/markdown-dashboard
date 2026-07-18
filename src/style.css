@@ -4,15 +4,26 @@
   font-weight: 400;
 
   color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
 
-  /* Chart palette (dataviz skill's validated default, dark values — this app has no light surface yet by default). */
+/*
+ * Theme is attribute-driven, not media-query-driven: `data-theme` is set on
+ * <html> as early as possible (inline script in index.html, before first
+ * paint) from localStorage's `md-dashboard:theme` override, falling back to
+ * `prefers-color-scheme`. src/main.ts keeps it in sync afterwards (manual
+ * toggle, or a live system-preference change while no override is stored).
+ * Dark is the default surface; light is the override block below.
+ */
+:root[data-theme='dark'] {
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+
+  /* Chart palette (dataviz skill's validated default, dark values). */
   --chart-text-primary: #ffffff;
   --chart-text-secondary: #c3c2b7;
   --chart-grid: #2c2c2a;
@@ -38,14 +49,42 @@ body {
   padding: 2rem;
 }
 
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
 h1 {
   font-size: 2rem;
   line-height: 1.1;
+  margin: 0;
+}
+
+.theme-toggle {
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 0.4rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0.4rem 0.6rem;
 }
 
 .dashboard-subtitle {
   color: rgba(255, 255, 255, 0.6);
   margin-top: 0;
+}
+
+.empty-state {
+  color: var(--chart-text-secondary, rgba(255, 255, 255, 0.6));
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  border-radius: 0.5rem;
+  padding: 2rem;
+  text-align: center;
 }
 
 .dashboard-grid {
@@ -206,47 +245,78 @@ h1 {
   font-size: 0.9rem;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
+:root[data-theme='light'] {
+  color: #213547;
+  background-color: #ffffff;
 
-    --chart-text-primary: #0b0b0b;
-    --chart-text-secondary: #52514e;
-    --chart-grid: #e1e0d9;
-    --series-1: #2a78d6;
-    --series-2: #008300;
-    --series-3: #e87ba4;
-    --series-4: #eda100;
-    --series-5: #1baf7a;
-    --series-6: #eb6834;
-    --series-7: #4a3aa7;
-    --series-8: #e34948;
+  --chart-text-primary: #0b0b0b;
+  --chart-text-secondary: #52514e;
+  --chart-grid: #e1e0d9;
+  --series-1: #2a78d6;
+  --series-2: #008300;
+  --series-3: #e87ba4;
+  --series-4: #eda100;
+  --series-5: #1baf7a;
+  --series-6: #eb6834;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+}
+
+:root[data-theme='light'] .dashboard-subtitle {
+  color: rgba(33, 53, 71, 0.6);
+}
+
+:root[data-theme='light'] .empty-state {
+  border-color: rgba(33, 53, 71, 0.2);
+}
+
+:root[data-theme='light'] .card {
+  border-color: rgba(33, 53, 71, 0.15);
+  background: rgba(33, 53, 71, 0.03);
+}
+
+:root[data-theme='light'] .toggle-btn,
+:root[data-theme='light'] .theme-toggle {
+  border-color: rgba(33, 53, 71, 0.15);
+}
+
+:root[data-theme='light'] .toggle-btn[aria-pressed='true'] {
+  background: rgba(33, 53, 71, 0.12);
+  border-color: rgba(33, 53, 71, 0.3);
+}
+
+:root[data-theme='light'] .progress-bar {
+  background: rgba(33, 53, 71, 0.12);
+}
+
+:root[data-theme='light'] .kpi-tile {
+  border-color: rgba(33, 53, 71, 0.15);
+}
+
+/* Responsive breakpoints: mobile (<640px) single column and tighter
+   spacing; tablet (640-1024px) narrower card minimum so 2+ columns fit;
+   desktop (>1024px) uses the auto-fill default set above. */
+@media (max-width: 640px) {
+  .dashboard {
+    padding: 1rem;
   }
 
-  .dashboard-subtitle {
-    color: rgba(33, 53, 71, 0.6);
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  h1 {
+    font-size: 1.5rem;
   }
 
   .card {
-    border-color: rgba(33, 53, 71, 0.15);
-    background: rgba(33, 53, 71, 0.03);
+    padding: 1rem;
   }
+}
 
-  .toggle-btn {
-    border-color: rgba(33, 53, 71, 0.15);
-  }
-
-  .toggle-btn[aria-pressed='true'] {
-    background: rgba(33, 53, 71, 0.12);
-    border-color: rgba(33, 53, 71, 0.3);
-  }
-
-  .progress-bar {
-    background: rgba(33, 53, 71, 0.12);
-  }
-
-  .kpi-tile {
-    border-color: rgba(33, 53, 71, 0.15);
+@media (min-width: 641px) and (max-width: 1024px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   }
 }

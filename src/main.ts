@@ -10,11 +10,14 @@ import {
   renderStatTileHtml,
   type KpiItem,
 } from './widgets/kpi-view.js'
-import { mountMermaid } from './widgets/mermaid-view.js'
+import { mountMermaid, setMermaidTheme } from './widgets/mermaid-view.js'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div class="dashboard">
-    <h1>Dashboard</h1>
+    <div class="dashboard-header">
+      <h1>Dashboard</h1>
+      <button id="theme-toggle" type="button" class="theme-toggle" aria-label="Toggle color theme"></button>
+    </div>
     <p id="doc-title" class="dashboard-subtitle"></p>
     <div id="content" class="dashboard-grid"></div>
   </div>
@@ -22,6 +25,55 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 
 const docTitleEl = document.querySelector<HTMLParagraphElement>('#doc-title')!
 const contentEl = document.querySelector<HTMLDivElement>('#content')!
+const themeToggleEl = document.querySelector<HTMLButtonElement>('#theme-toggle')!
+
+// --- Theme: default from prefers-color-scheme, manual toggle overrides it,
+// override persists in localStorage. index.html's inline script already set
+// the initial `data-theme` on <html> before first paint (avoids a flash of
+// the wrong theme); this module keeps it in sync afterwards.
+type Theme = 'light' | 'dark'
+const THEME_STORAGE_KEY = 'md-dashboard:theme'
+const colorSchemeQuery = window.matchMedia('(prefers-color-scheme: dark)')
+
+function storedTheme(): Theme | null {
+  const value = localStorage.getItem(THEME_STORAGE_KEY)
+  return value === 'light' || value === 'dark' ? value : null
+}
+
+function systemTheme(): Theme {
+  return colorSchemeQuery.matches ? 'dark' : 'light'
+}
+
+let currentTheme: Theme = storedTheme() ?? systemTheme()
+
+let lastMessage: ContentMessage | null = null
+
+function applyTheme(theme: Theme): void {
+  currentTheme = theme
+  document.documentElement.setAttribute('data-theme', theme)
+  themeToggleEl.textContent = theme === 'dark' ? '🌙' : '☀️'
+  themeToggleEl.setAttribute('aria-pressed', String(theme === 'dark'))
+  setMermaidTheme(theme)
+  // Chart colors are read from CSS custom properties at mount time (see
+  // chart-view.ts) and mermaid diagrams are painted once as static SVG, so
+  // neither picks up a theme change on its own — re-render whatever's on
+  // screen so mounted charts/diagrams get redrawn with the new palette.
+  if (lastMessage) renderCards(lastMessage)
+}
+
+themeToggleEl.addEventListener('click', () => {
+  const next: Theme = currentTheme === 'dark' ? 'light' : 'dark'
+  localStorage.setItem(THEME_STORAGE_KEY, next)
+  applyTheme(next)
+})
+
+// Only auto-follow the system preference while the user hasn't manually
+// overridden it — a stored override always wins.
+colorSchemeQuery.addEventListener('change', () => {
+  if (!storedTheme()) applyTheme(systemTheme())
+})
+
+applyTheme(currentTheme)
 
 interface Card {
   heading: string
@@ -104,8 +156,17 @@ function viewsFor(card: Card): WidgetView[] {
 
 const VIEW_STORAGE_PREFIX = 'md-dashboard:view:'
 
-function storedViewId(heading: string): string {
-  return localStorage.getItem(VIEW_STORAGE_PREFIX + heading) ?? 'default'
+/**
+ * Reads the stored view id for a card and clamps it to one still valid for
+ * that card's *current* shape. A stored id can go stale if the underlying
+ * Markdown changed since it was picked (e.g. a table lost a column and no
+ * longer offers Scatter) — falling back to 'default' instead of rendering
+ * nothing keeps the toggle UI and the body in sync.
+ */
+function storedViewId(card: Card): string {
+  const stored = localStorage.getItem(VIEW_STORAGE_PREFIX + card.heading) ?? 'default'
+  const valid = viewsFor(card).some((view) => view.id === stored)
+  return valid ? stored : 'default'
 }
 
 function setStoredViewId(heading: string, viewId: string): void {
@@ -192,7 +253,9 @@ function renderToggle(card: Card, viewId: string): string {
   return `<div class="card-toggle" role="group" aria-label="View">${buttons}</div>`
 }
 
-function renderCards({ title, cards }: ContentMessage): void {
+function renderCards(message: ContentMessage): void {
+  const { title, cards } = message
+  lastMessage = message
   lastCards = cards
   docTitleEl.textContent = title
   // The whole grid (and every canvas in it) is about to be discarded — tear
@@ -200,9 +263,15 @@ function renderCards({ title, cards }: ContentMessage): void {
   // detached canvases.
   destroyAllCharts()
   destroyAllGauges()
+
+  if (cards.length === 0) {
+    contentEl.innerHTML = `<p class="empty-state">No sections found. Add a "## Heading" to your Markdown file to create a card.</p>`
+    return
+  }
+
   contentEl.innerHTML = cards
     .map((card) => {
-      const viewId = storedViewId(card.heading)
+      const viewId = storedViewId(card)
       return `
         <section class="card" data-heading="${escapeHtml(card.heading)}">
           <div class="card-header">
@@ -220,7 +289,7 @@ function renderCards({ title, cards }: ContentMessage): void {
   const sections = contentEl.querySelectorAll<HTMLElement>('.card')
   cards.forEach((card, index) => {
     const bodyEl = sections[index]?.querySelector<HTMLElement>('.card-body')
-    if (bodyEl) mountActiveView(card, storedViewId(card.heading), bodyEl)
+    if (bodyEl) mountActiveView(card, storedViewId(card), bodyEl)
   })
 }
 

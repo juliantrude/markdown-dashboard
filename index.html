@@ -4,6 +4,18 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>md-dashboard</title>
+    <script>
+      // Set data-theme before first paint so there's no flash of the wrong
+      // theme. Mirrors the resolution logic in src/main.ts's theme module
+      // (stored override wins, else the browser's prefers-color-scheme).
+      (function () {
+        var stored = localStorage.getItem('md-dashboard:theme')
+        var theme = stored === 'light' || stored === 'dark'
+          ? stored
+          : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        document.documentElement.setAttribute('data-theme', theme)
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>

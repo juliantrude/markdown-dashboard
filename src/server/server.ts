@@ -73,16 +73,33 @@ export async function startServer({ filePath, port }: StartServerOptions): Promi
     socket.send(JSON.stringify({ type: 'content', ...doc }))
   }
 
+  // The Markdown file is user input edited outside this process — parsing it
+  // is a system boundary, so a malformed edit (or one caught mid-save) must
+  // never crash the server or the watcher. On failure, keep serving whatever
+  // was last sent rather than pushing broken content.
+  const safeParse = (content: string): ParsedDocument | null => {
+    try {
+      return parseDocument(content)
+    } catch (error) {
+      console.error('md-dashboard: failed to parse markdown, keeping last known content:', error)
+      return null
+    }
+  }
+
   wss.on('connection', (socket) => {
     clients.add(socket)
     socket.on('close', () => clients.delete(socket))
     readFile(filePath, 'utf-8')
-      .then((content) => send(socket, parseDocument(content)))
+      .then((content) => {
+        const doc = safeParse(content)
+        if (doc) send(socket, doc)
+      })
       .catch((error: unknown) => console.error('md-dashboard: failed to send initial content:', error))
   })
 
   const fileWatcher: FileWatcher = watchFile(filePath, (content) => {
-    const doc = parseDocument(content)
+    const doc = safeParse(content)
+    if (!doc) return
     for (const client of clients) {
       if (client.readyState === client.OPEN) send(client, doc)
     }
