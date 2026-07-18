@@ -1,6 +1,6 @@
 import MarkdownIt from 'markdown-it'
 import Token from 'markdown-it/lib/token.mjs'
-import { extractTableData, validChartTypes, type ChartType, type TableData } from './table.js'
+import { chooseDefaultChart, extractTableData, validChartTypes, type ChartType, type TableData } from './table.js'
 import { extractTaskItems, type TaskItem } from './tasklist.js'
 import { extractKpiListItems, extractSingleMetric, type KpiItem } from './kpi.js'
 import { extractMermaidSource } from './mermaid.js'
@@ -10,14 +10,25 @@ const md: MarkdownIt = new MarkdownIt({ html: false })
 
 export interface Card {
   heading: string
-  /** Default widget render: for a table-bearing card this is already the plain `<table>` (ELEMENTS.md: default widget for Table is Table itself). */
+  /** Full default render of everything in the section — the fallback body for cards with no chartable shape. */
   html: string
   /** Faithful "Markdown" raw-render mode (ELEMENTS.md): real lists, real (disabled) checkboxes for `- [ ]`/`- [x]`. */
   markdownHtml: string
+  /**
+   * Top-level paragraph HTML only. Chart-first (ELEMENTS.md v2) renders this as
+   * the caption *under* a card's chart, clamped to 2 lines with "Read more" —
+   * so it must exclude text that already belongs to another widget (list items,
+   * table cells, blockquotes) and the lone `Metric:` line, or it would appear twice.
+   */
+  prose?: string
+  /** The card's first table rendered on its own, for the "Table" toggle alternative — `html` would drag the prose along and duplicate the caption. */
+  tableHtml?: string
   /** Chart-ready data extracted from the card's first table, if any (Increment 7). */
   table?: TableData
   /** Chart types valid for `table`'s shape, per ELEMENTS.md ("only alternatives valid for the data shape"). */
   chartTypes?: ChartType[]
+  /** The chart the table renders as by default under chart-first — picked from the data shape server-side, so the client needn't pull the parser in to decide. */
+  defaultChartType?: ChartType
   /** Task-list items (`- [ ]`/`- [x]`) found anywhere in the card, if any (Increment 8). */
   tasks?: TaskItem[]
   /** `Key: value` numeric list items, if the card's whole list qualifies (Increment 9). Mutually exclusive with `metric`. */
@@ -76,6 +87,40 @@ function markCheckboxes(tokens: Token[]): void {
 }
 
 /**
+ * Renders only the card's *top-level* paragraphs (`level === 0`). Paragraphs
+ * nested inside a list item, blockquote or table cell have a level above 0, so
+ * this deliberately skips them: that text is already displayed by the list /
+ * callout / chart widget that owns it, and repeating it in the caption would
+ * show it twice.
+ */
+function extractProseHtml(tokens: Token[]): string | undefined {
+  const prose: Token[] = []
+
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].type !== 'paragraph_open' || tokens[i].level !== 0) continue
+    const inline = tokens[i + 1]
+    const close = tokens[i + 2]
+    if (inline?.type === 'inline' && close?.type === 'paragraph_close') {
+      prose.push(tokens[i], inline, close)
+      i += 2
+    }
+  }
+
+  if (prose.length === 0) return undefined
+  const html = md.renderer.render(prose, md.options, {}).trim()
+  return html === '' ? undefined : html
+}
+
+/** Renders the card's first table on its own (`table_open` … `table_close`). */
+function extractTableHtml(tokens: Token[]): string | undefined {
+  const start = tokens.findIndex((token) => token.type === 'table_open')
+  if (start === -1) return undefined
+  const end = tokens.findIndex((token, index) => index > start && token.type === 'table_close')
+  if (end === -1) return undefined
+  return md.renderer.render(tokens.slice(start, end + 1), md.options, {})
+}
+
+/**
  * Splits a Markdown document into the dashboard shape: the first `#` heading
  * becomes the title (not a card), and every `##` heading starts a new card
  * that owns all tokens up to the next `##` (or the end of the document).
@@ -96,14 +141,19 @@ export function parseDocument(markdown: string): ParsedDocument {
       const html = md.renderer.render(currentTokens, md.options, {})
       const table = extractTableData(currentTokens) ?? undefined
       const chartTypes = table ? validChartTypes(table) : undefined
+      const defaultChartType = table ? chooseDefaultChart(table) : undefined
       const tasks = extractTaskItems(currentTokens)
       const kpi = extractKpiListItems(currentTokens)
       const metric = kpi ? undefined : extractSingleMetric(currentTokens)
       const mermaid = extractMermaidSource(currentTokens)
       const chartFence = extractChartFence(currentTokens)
+      const tableHtml = extractTableHtml(currentTokens)
+      // A lone `Metric: value` card's only paragraph *is* the metric, and the
+      // stat tile already renders it — so it must not also become a caption.
+      const prose = metric ? undefined : extractProseHtml(currentTokens)
       markCheckboxes(currentTokens)
       const markdownHtml = md.renderer.render(currentTokens, md.options, {})
-      cards.push({ heading: currentHeading, html, markdownHtml, table, chartTypes, tasks, kpi, metric, mermaid, chartFence })
+      cards.push({ heading: currentHeading, html, markdownHtml, prose, tableHtml, table, chartTypes, defaultChartType, tasks, kpi, metric, mermaid, chartFence })
     }
     currentHeading = null
     currentTokens = []

@@ -130,6 +130,44 @@ export function extractTableData(tokens: Token[]): TableData | null {
  * - `scatter` (x/y pair): needs 2+ numeric series to plot one against another
  *   (only the first two are used).
  */
+/**
+ * Category labels that read as a point on a time axis: a year, an ISO date, a
+ * quarter, or an English/German month name.
+ */
+const timeLikeCategory =
+  /^(\d{4}|\d{4}-\d{1,2}(-\d{1,2})?|q[1-4](\s*\/?\s*\d{2,4})?|jan(uar|uary)?|feb(ruar|ruary)?|mar(ch)?|mär(z)?|apr(il)?|may|mai|jun[ei]?|jul[iy]?|aug(ust)?|sep(t(ember)?)?|o[ck]t(ober)?|nov(ember)?|de[cz](ember)?)$/i
+
+/**
+ * True only when *every* category reads as a time point. Deliberately strict:
+ * a column mixing months with a "Total" row is not a trend axis, and silently
+ * drawing it as a line would imply a progression that isn't there.
+ */
+function isTimeLike(categories: string[]): boolean {
+  return categories.length >= 2 && categories.every((category) => timeLikeCategory.test(category.trim()))
+}
+
+/**
+ * The chart a table renders as by default under chart-first (ELEMENTS.md v2):
+ * Line for a time-like first column, Grouped Bar for multiple numeric series,
+ * Bar otherwise. Always returns a type `validChartTypes` allows for this shape,
+ * so the default view can never land on a chart the data can't support.
+ */
+export function chooseDefaultChart(table: TableData): ChartType {
+  const valid = validChartTypes(table)
+  const firstValid = (...preferred: ChartType[]): ChartType | undefined =>
+    preferred.find((type) => valid.includes(type))
+
+  if (isTimeLike(table.categories)) {
+    const trend = firstValid('line')
+    if (trend) return trend
+  }
+  if (table.series.length >= 2) {
+    const grouped = firstValid('bar-grouped')
+    if (grouped) return grouped
+  }
+  return firstValid('bar', 'bar-grouped', 'line', 'pie', 'radar', 'scatter') ?? 'bar'
+}
+
 export function validChartTypes(table: TableData): ChartType[] {
   const { categories, series } = table
   const types: ChartType[] = []

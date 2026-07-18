@@ -38,9 +38,11 @@ test('toggle switches between the default widget and the faithful Markdown raw-r
 
   const card = page.locator('.card', { hasText: 'Tasks' })
 
-  // Default view: no widget-specific task-list rendering yet (Increment 8) — plain list text.
+  // Chart-first default: the segmented progress bar, so neither checkboxes nor
+  // the raw `- [ ]` list text appear until the Markdown view is opened.
   await expect(card.locator('input[type="checkbox"]')).toHaveCount(0)
-  await expect(card.locator('.card-body')).toContainText('[ ] Buy milk')
+  await expect(card.locator('.task-segment')).toHaveCount(2)
+  await expect(card.locator('.card-body')).not.toContainText('[ ] Buy milk')
 
   await card.locator('.toggle-btn[data-view="markdown"]').click()
 

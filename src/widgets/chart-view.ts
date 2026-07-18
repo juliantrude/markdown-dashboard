@@ -255,3 +255,65 @@ export function mountChart(heading: string, canvas: HTMLCanvasElement, table: Ta
   const chart = new Chart(canvas, buildConfig(table, type))
   chartsByHeading.set(heading, chart)
 }
+
+export interface TaskSegment {
+  label: string
+  done: boolean
+}
+
+function taskStatusColor(done: boolean): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(done ? '--task-done' : '--task-open').trim()
+}
+
+/**
+ * One equal-sized slice per task item, coloured by status (ELEMENTS.md v2).
+ *
+ * Deliberately bypasses `foldToOther`: colour here encodes a two-state
+ * *status*, not a category, so the 8-slot categorical palette ladder doesn't
+ * apply — and folding items into "Other" would destroy exactly the per-item
+ * detail this view exists to show.
+ */
+export function mountTaskChart(
+  heading: string,
+  canvas: HTMLCanvasElement,
+  segments: TaskSegment[],
+  type: 'pie' | 'donut',
+): void {
+  destroyChart(heading)
+  const chart = new Chart(canvas, {
+    type: type === 'donut' ? 'doughnut' : 'pie',
+    data: {
+      labels: segments.map((segment) => segment.label),
+      datasets: [
+        {
+          data: segments.map(() => 1),
+          backgroundColor: segments.map((segment) => taskStatusColor(segment.done)),
+          borderWidth: 0,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      // Each item's slice must be individually targetable; the shared 'index'
+      // mode from baseOptions would light up the whole ring at once.
+      interaction: { mode: 'nearest', intersect: true },
+      plugins: {
+        // A legend with one entry per task would flood the card — the tooltip
+        // is the way in to an individual item here.
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            // Every slice is worth 1, so printing the value would be noise:
+            // the item's text and its status are the point of this tooltip.
+            label: (context) => {
+              const segment = segments[context.dataIndex]
+              return segment ? `${segment.done ? '✓' : '○'} ${segment.label}` : ''
+            },
+          },
+        },
+      },
+    },
+  })
+  chartsByHeading.set(heading, chart)
+}

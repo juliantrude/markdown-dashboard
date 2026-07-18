@@ -33,40 +33,66 @@ test.afterAll(() => {
   cliProcess.kill()
 })
 
-test('a mixed task list renders as a progress bar with correct percentage and per-item status', async ({ page }) => {
+test('a task list defaults to a segmented bar with one segment per item', async ({ page }) => {
   await page.goto(`http://localhost:${PORT}`)
 
   const card = page.locator('.card', { hasText: 'Milestones' })
 
-  // Default view is still the plain list text (ELEMENTS.md default widget: Checklist — Increment 6 covered the raw toggle mechanism, not this widget).
-  await expect(card.locator('.toggle-btn[data-view="progress-bar"]')).toHaveCount(1)
-  await expect(card.locator('.toggle-btn[data-view="progress-donut"]')).toHaveCount(1)
-
-  await card.locator('.toggle-btn[data-view="progress-bar"]').click()
-
-  // 2 of 4 done = 50%.
+  // Chart-first: the segmented bar is the default view — no click needed.
   await expect(card.locator('.progress-label')).toHaveText('50% complete (2/4)')
-  await expect(card.locator('.progress-bar-fill')).toHaveCSS('width', /.+/)
 
-  // Every milestone's individual done/open state stays visible alongside the aggregate.
-  const items = card.locator('.task-item')
-  await expect(items).toHaveCount(4)
-  const checkboxes = card.locator('.task-item input[type="checkbox"]')
-  await expect(checkboxes.nth(0)).toBeChecked()
-  await expect(checkboxes.nth(1)).toBeChecked()
-  await expect(checkboxes.nth(2)).not.toBeChecked()
-  await expect(checkboxes.nth(3)).not.toBeChecked()
-  await expect(items.nth(2)).toContainText('Backfill data')
+  // The defining v2 change: one segment per item, not a two-slice Done/Open
+  // aggregate. Each milestone's state is visible *in the chart itself*.
+  await expect(card.locator('.task-segment')).toHaveCount(4)
+  await expect(card.locator('.task-segment-done')).toHaveCount(2)
+  await expect(card.locator('.task-segment-open')).toHaveCount(2)
+
+  // Below the disclosure threshold the chart stands alone — no text list beside it.
+  await expect(card.locator('.task-item')).toHaveCount(0)
 })
 
-test('the progress donut view shows a chart plus the same per-item checklist', async ({ page }) => {
+test('a segment reveals its item text on hover and on tap', async ({ page }) => {
+  await page.goto(`http://localhost:${PORT}`)
+
+  const card = page.locator('.card', { hasText: 'Milestones' })
+  const tooltip = card.locator('.segment-tooltip')
+
+  await expect(tooltip).toBeHidden()
+
+  // Desktop path: hover.
+  await card.locator('.task-segment').nth(2).hover()
+  await expect(tooltip).toBeVisible()
+  await expect(tooltip).toHaveText('Backfill data')
+
+  // Touch path: a tap must reach the same tooltip, since hover doesn't exist there.
+  await card.locator('.task-segment').nth(0).click()
+  await expect(tooltip).toBeVisible()
+  await expect(tooltip).toHaveText('Design schema')
+})
+
+test('the progress donut renders one slice per item, without a separate checklist', async ({ page }) => {
   await page.goto(`http://localhost:${PORT}`)
 
   const card = page.locator('.card', { hasText: 'Milestones' })
   await card.locator('.toggle-btn[data-view="progress-donut"]').click()
 
   await expect(card.locator('canvas')).toHaveCount(1)
-  await expect(card.locator('.task-item')).toHaveCount(4)
+  await expect(card.locator('.task-item')).toHaveCount(0)
+})
+
+test('the Checklist alternative still shows every item and its state', async ({ page }) => {
+  await page.goto(`http://localhost:${PORT}`)
+
+  const card = page.locator('.card', { hasText: 'Milestones' })
+  await card.locator('.toggle-btn[data-view="checklist"]').click()
+
+  const items = card.locator('.task-item')
+  await expect(items).toHaveCount(4)
+  const checkboxes = card.locator('.task-item input[type="checkbox"]')
+  await expect(checkboxes.nth(0)).toBeChecked()
+  await expect(checkboxes.nth(1)).toBeChecked()
+  await expect(checkboxes.nth(2)).not.toBeChecked()
+  await expect(items.nth(2)).toContainText('Backfill data')
 })
 
 test('a card with no task list offers no progress toggles', async ({ page }) => {

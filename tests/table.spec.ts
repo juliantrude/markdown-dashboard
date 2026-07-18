@@ -33,18 +33,20 @@ test.afterAll(() => {
   cliProcess.kill()
 })
 
-test('a single-series table renders as Bar and switches to Pie', async ({ page }) => {
+test('a single-series table defaults to a chart, with the table one click away', async ({ page }) => {
   await page.goto(`http://localhost:${PORT}`)
 
   const card = page.locator('.card', { hasText: 'Fruit Counts' })
 
-  // Default view is the plain table (ELEMENTS.md: default widget for Table is Table itself).
+  // Chart-first (ELEMENTS.md v2): the default view is the chart, not the
+  // <table> it was parsed from — that inverts the old table-first default.
+  await expect(card.locator('canvas')).toHaveCount(1)
+  await expect(card.locator('table')).toHaveCount(0)
+
+  // The plain table stays reachable as an alternative, for transparency.
+  await card.locator('.toggle-btn[data-view="table"]').click()
   await expect(card.locator('table')).toBeVisible()
   await expect(card.locator('canvas')).toHaveCount(0)
-
-  await card.locator('.toggle-btn[data-view="bar"]').click()
-  await expect(card.locator('canvas')).toHaveCount(1)
-  await expect(card.locator('.toggle-btn[data-view="bar"]')).toHaveAttribute('aria-pressed', 'true')
 
   await card.locator('.toggle-btn[data-view="pie"]').click()
   await expect(card.locator('canvas')).toHaveCount(1)
@@ -72,6 +74,17 @@ test('a two-series table offers grouped/stacked bar and scatter but not plain Ba
 
   await card.locator('.toggle-btn[data-view="scatter"]').click()
   await expect(card.locator('canvas')).toHaveCount(1)
+})
+
+test('the default chart is picked from the data shape', async ({ page }) => {
+  await page.goto(`http://localhost:${PORT}`)
+
+  // Plain categories (fruit names) -> the safe categorical default.
+  await expect(page.locator('.card', { hasText: 'Fruit Counts' })).toHaveAttribute('data-default-chart', 'bar')
+
+  // A time-like first column (Jan/Feb/Mar) reads as a trend, so Line wins over
+  // the Grouped Bar this table's two series would otherwise get.
+  await expect(page.locator('.card', { hasText: 'Monthly Sales' })).toHaveAttribute('data-default-chart', 'line')
 })
 
 test('a card with no table offers no chart toggles', async ({ page }) => {

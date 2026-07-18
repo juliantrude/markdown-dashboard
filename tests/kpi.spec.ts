@@ -34,26 +34,25 @@ test.afterAll(() => {
   cliProcess.kill()
 })
 
-test('a numeric list offers KPI tiles / Bar / Pie and defaults to the plain list', async ({ page }) => {
+test('a numeric list defaults to KPI tiles, with the plain list as an alternative', async ({ page }) => {
   await page.goto(`http://localhost:${PORT}`)
 
   const card = page.locator('.card', { hasText: 'Quarterly Metrics' })
 
-  // Default view is still the plain list text, per ELEMENTS.md (List is the default widget).
-  await expect(card.locator('.kpi-tile')).toHaveCount(0)
-  await expect(card.locator('.card-body')).toContainText('Revenue: 120')
-
-  await expect(card.locator('.toggle-btn[data-view="kpi-tiles"]')).toHaveCount(1)
-  await expect(card.locator('.toggle-btn[data-view="kpi-bar"]')).toHaveCount(1)
-  await expect(card.locator('.toggle-btn[data-view="kpi-pie"]')).toHaveCount(1)
-
-  await card.locator('.toggle-btn[data-view="kpi-tiles"]').click()
-
+  // Chart-first (ELEMENTS.md v2): stat tiles are the default now, not the list.
   const tiles = card.locator('.kpi-tile')
   await expect(tiles).toHaveCount(3)
   await expect(tiles.nth(0)).toContainText('120')
   await expect(tiles.nth(0)).toContainText('Revenue')
   await expect(tiles.nth(2)).toContainText('Headcount')
+
+  await expect(card.locator('.toggle-btn[data-view="kpi-bar"]')).toHaveCount(1)
+  await expect(card.locator('.toggle-btn[data-view="kpi-pie"]')).toHaveCount(1)
+
+  // The plain list has swapped places with the tiles — it is the alternative.
+  await card.locator('.toggle-btn[data-view="kpi-list"]').click()
+  await expect(card.locator('.kpi-tile')).toHaveCount(0)
+  await expect(card.locator('.card-body')).toContainText('Revenue: 120')
 })
 
 test('the KPI Bar and Pie views mount a chart', async ({ page }) => {

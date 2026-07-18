@@ -135,6 +135,10 @@ h1 {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 1.5rem;
+  /* Each card takes its own natural height instead of stretching to the tallest
+     in its row. Chart-first widgets are far more compact than the tables and
+     lists they replaced, so stretching left cards mostly empty. */
+  align-items: start;
 }
 
 .card {
@@ -380,4 +384,169 @@ h1 {
   .dashboard-grid {
     grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Chart-first (ELEMENTS.md v2)
+   --------------------------------------------------------------------------- */
+
+/* Segment colour encodes a two-state *status*, so it deliberately sits outside
+   the categorical --series-* palette. */
+:root[data-theme='dark'] {
+  --task-done: #3987e5;
+  --task-open: #3f3f3c;
+  --tooltip-bg: #3a3a37;
+  --tooltip-text: #ffffff;
+}
+
+:root[data-theme='light'] {
+  --task-done: #2a78d6;
+  --task-open: #d5d4cd;
+  --tooltip-bg: #2b2b29;
+  --tooltip-text: #ffffff;
+}
+
+.dashboard-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Anchors the absolutely positioned segment tooltip. */
+.task-progress {
+  position: relative;
+}
+
+.task-segments {
+  display: flex;
+  gap: 2px;
+  height: 0.75rem;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.task-segment {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: var(--task-open);
+  cursor: pointer;
+  transition: filter 0.12s ease;
+}
+
+.task-segment-done {
+  background: var(--task-done);
+}
+
+.task-segment:hover,
+.task-segment:focus-visible {
+  filter: brightness(1.35);
+  outline: none;
+}
+
+.segment-tooltip {
+  position: absolute;
+  transform: translateX(-50%);
+  /* max-content stops the tooltip collapsing into a narrow column when a
+     segment near the right edge leaves little shrink-to-fit width. */
+  width: max-content;
+  max-width: 16rem;
+  padding: 0.35rem 0.55rem;
+  border-radius: 6px;
+  background: var(--tooltip-bg);
+  color: var(--tooltip-text);
+  font-size: 0.8rem;
+  line-height: 1.3;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.segment-tooltip[hidden] {
+  display: none;
+}
+
+.task-items-disclosure {
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
+}
+
+.task-items-disclosure summary {
+  cursor: pointer;
+  color: var(--chart-text-secondary);
+}
+
+.task-items-disclosure .task-list {
+  margin-top: 0.5rem;
+}
+
+.kpi-list {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+/* Text is secondary but never lost: clamped to 2 rendered lines, expandable
+   inline via the Read more control that wireReadMore reveals only on overflow. */
+.clamp-body {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.clamp.expanded .clamp-body {
+  display: block;
+  overflow: visible;
+}
+
+.clamp-body > :first-child {
+  margin-top: 0;
+}
+
+.clamp-body > :last-child {
+  margin-bottom: 0;
+}
+
+.read-more {
+  margin-top: 0.35rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--task-done);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.read-more:hover {
+  text-decoration: underline;
+}
+
+.card-caption {
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+  color: var(--chart-text-secondary);
+}
+
+/* Prose-only cards stay visible but recede so charts dominate the grid. */
+.card-prose {
+  background: transparent;
+}
+
+.card-prose .card-heading {
+  font-size: 1rem;
+}
+
+.card-prose .card-body {
+  font-size: 0.9rem;
+  color: var(--chart-text-secondary);
+}
+
+/* Global transparency view: one readable column, not a dashboard grid. */
+.dashboard-document {
+  max-width: 48rem;
+  line-height: 1.7;
+}
+
+.dashboard-document h2 {
+  margin-top: 2rem;
 }

@@ -31,6 +31,12 @@ export function renderKpiTilesHtml(items: KpiItem[]): string {
   return `<div class="kpi-grid">${tiles}</div>`
 }
 
+/** Plain `Key: value` list — the "List" alternative, now that KPI tiles are the chart-first default. */
+export function renderKpiListHtml(items: KpiItem[]): string {
+  const entries = items.map((item) => `<li>${escapeHtml(item.label)}: ${formatValue(item)}</li>`).join('')
+  return `<ul class="kpi-list">${entries}</ul>`
+}
+
 /** Reshapes KPI items into `TableData` so the Bar/Pie alternatives reuse chart-view's existing builders. */
 export function kpiTableData(items: KpiItem[]): TableData {
   return { categories: items.map((item) => item.label), series: [{ label: 'Value', data: items.map((item) => item.value) }] }

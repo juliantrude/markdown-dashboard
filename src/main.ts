@@ -1,11 +1,27 @@
 import './style.css'
-import { CHART_VIEW_META, destroyAllCharts, destroyChart, mountChart, type ChartType, type TableData } from './widgets/chart-view.js'
-import { renderProgressBarHtml, renderTaskItemsHtml, taskDonutData, type TaskItem } from './widgets/tasklist-view.js'
+import {
+  CHART_VIEW_META,
+  destroyAllCharts,
+  destroyChart,
+  mountChart,
+  mountTaskChart,
+  type ChartType,
+  type TableData,
+} from './widgets/chart-view.js'
+import {
+  attachSegmentTooltip,
+  renderProgressBarHtml,
+  renderTaskItemsDisclosureHtml,
+  renderTaskItemsHtml,
+  taskLabel,
+  type TaskItem,
+} from './widgets/tasklist-view.js'
 import {
   destroyAllGauges,
   destroyGauge,
   kpiTableData,
   mountGauge,
+  renderKpiListHtml,
   renderKpiTilesHtml,
   renderStatTileHtml,
   type KpiItem,
@@ -16,7 +32,10 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div class="dashboard">
     <div class="dashboard-header">
       <h1>Dashboard</h1>
-      <button id="theme-toggle" type="button" class="theme-toggle" aria-label="Toggle color theme"></button>
+      <div class="dashboard-actions">
+        <button id="markdown-toggle" type="button" class="theme-toggle" aria-label="Show original Markdown" title="Show original Markdown">▤</button>
+        <button id="theme-toggle" type="button" class="theme-toggle" aria-label="Toggle color theme"></button>
+      </div>
     </div>
     <div class="dashboard-body">
       <nav id="file-nav" class="file-nav" aria-label="Markdown files" hidden></nav>
@@ -32,6 +51,7 @@ const docTitleEl = document.querySelector<HTMLParagraphElement>('#doc-title')!
 const contentEl = document.querySelector<HTMLDivElement>('#content')!
 const themeToggleEl = document.querySelector<HTMLButtonElement>('#theme-toggle')!
 const fileNavEl = document.querySelector<HTMLElement>('#file-nav')!
+const markdownToggleEl = document.querySelector<HTMLButtonElement>('#markdown-toggle')!
 
 // --- Theme: default from prefers-color-scheme, manual toggle overrides it,
 // override persists in localStorage. index.html's inline script already set
@@ -85,8 +105,14 @@ interface Card {
   heading: string
   html: string
   markdownHtml: string
+  /** Top-level paragraphs only — rendered as the clamped caption under a chart. */
+  prose?: string
+  /** The card's table on its own, for the "Table" alternative view. */
+  tableHtml?: string
   table?: TableData
   chartTypes?: ChartType[]
+  /** Chart-first default for this table, chosen server-side from the data shape. */
+  defaultChartType?: ChartType
   tasks?: TaskItem[]
   kpi?: KpiItem[]
   metric?: KpiItem
@@ -151,7 +177,19 @@ let selectedFile: string | null = null
 // lone metric. A ```mermaid fence has no alternatives at all: only its
 // "default" view is special-cased (to the rendered diagram, mounted
 // async via mermaid.render — see mountActiveView).
-type WidgetKind = 'default' | 'markdown' | 'chart' | 'progress-bar' | 'progress-donut' | 'kpi-tiles' | 'kpi-bar' | 'kpi-pie' | 'gauge'
+type WidgetKind =
+  | 'default'
+  | 'markdown'
+  | 'chart'
+  | 'table'
+  | 'progress-bar'
+  | 'progress-donut'
+  | 'checklist'
+  | 'kpi-tiles'
+  | 'kpi-bar'
+  | 'kpi-pie'
+  | 'kpi-list'
+  | 'gauge'
 
 interface WidgetView {
   id: string
@@ -160,23 +198,39 @@ interface WidgetView {
   kind: WidgetKind
 }
 
+/**
+ * Whether the card has a shape worth visualising. Chart-first (ELEMENTS.md v2)
+ * only applies to these: a card with none of them has nothing to chart, so it
+ * stays a (de-emphasised) text card instead of being forced into a widget.
+ */
+function isChartable(card: Card): boolean {
+  return Boolean(card.table || card.tasks?.length || card.kpi?.length || card.metric || card.mermaid || card.chartFence)
+}
+
 function viewsFor(card: Card): WidgetView[] {
   const views: WidgetView[] = [
-    { id: 'default', label: 'Widget', icon: '▦', kind: 'default' },
+    { id: 'default', label: 'Default', icon: '▦', kind: 'default' },
     { id: 'markdown', label: 'Markdown', icon: '▤', kind: 'markdown' },
   ]
   for (const chartType of card.chartTypes ?? []) {
     const meta = CHART_VIEW_META[chartType]
     views.push({ id: chartType, label: meta.label, icon: meta.icon, kind: 'chart' })
   }
+  // Chart-first inverts the old default: the table is now an *alternative* to
+  // the chart, not the other way round.
+  if (card.tableHtml) {
+    views.push({ id: 'table', label: 'Table', icon: '▦', kind: 'table' })
+  }
   if (card.tasks?.length) {
     views.push({ id: 'progress-bar', label: 'Progress bar', icon: '▬', kind: 'progress-bar' })
     views.push({ id: 'progress-donut', label: 'Progress donut', icon: '🍩', kind: 'progress-donut' })
+    views.push({ id: 'checklist', label: 'Checklist', icon: '☑', kind: 'checklist' })
   }
   if (card.kpi?.length) {
     views.push({ id: 'kpi-tiles', label: 'KPI tiles', icon: '🔢', kind: 'kpi-tiles' })
     views.push({ id: 'kpi-bar', label: 'Bar', icon: '📊', kind: 'kpi-bar' })
     views.push({ id: 'kpi-pie', label: 'Pie', icon: '🥧', kind: 'kpi-pie' })
+    views.push({ id: 'kpi-list', label: 'List', icon: '☰', kind: 'kpi-list' })
   }
   if (card.metric) {
     views.push({ id: 'gauge', label: 'Gauge', icon: '⏱', kind: 'gauge' })
@@ -209,54 +263,126 @@ function setStoredViewId(heading: string, viewId: string): void {
 
 let lastCards: Card[] = []
 
-function renderCardBody(card: Card, viewId: string): string {
-  if (viewId === 'markdown') return card.markdownHtml
-  const views = viewsFor(card)
-  const active = views.find((view) => view.id === viewId)
-  if (active?.kind === 'chart') return '<div class="chart-container"><canvas></canvas></div>'
+const CHART_CANVAS = '<div class="chart-container"><canvas></canvas></div>'
+
+/**
+ * Wraps text in the 2-line clamp with its "Read more" control (ELEMENTS.md v2).
+ * The button ships hidden and is only revealed by `wireReadMore` for text that
+ * actually overflows — otherwise short captions would carry a pointless control.
+ */
+function clampHtml(inner: string, extraClass: string): string {
+  return `
+    <div class="clamp ${extraClass}">
+      <div class="clamp-body">${inner}</div>
+      <button type="button" class="read-more" hidden>Read more</button>
+    </div>
+  `
+}
+
+/** The caption under a chart: the card's prose, clamped. Empty when the card has no top-level prose. */
+function renderCaptionHtml(card: Card): string {
+  return card.prose ? clampHtml(card.prose, 'card-caption') : ''
+}
+
+/**
+ * The card's widget markup, or `null` when the card has nothing chartable —
+ * that case falls through to a de-emphasised prose card instead.
+ */
+function renderWidget(card: Card, viewId: string): string | null {
+  const active = viewsFor(card).find((view) => view.id === viewId)
+
+  if (active?.kind === 'chart') return CHART_CANVAS
+  if (active?.kind === 'table' && card.tableHtml) return card.tableHtml
+  if (active?.kind === 'checklist' && card.tasks) return renderTaskItemsHtml(card.tasks)
   if (active?.kind === 'progress-bar' && card.tasks) {
-    return `<div class="task-progress">${renderProgressBarHtml(card.tasks)}${renderTaskItemsHtml(card.tasks)}</div>`
+    return `<div class="task-progress">${renderProgressBarHtml(card.tasks)}${renderTaskItemsDisclosureHtml(card.tasks)}</div>`
   }
   if (active?.kind === 'progress-donut' && card.tasks) {
-    return `<div class="task-progress"><div class="chart-container chart-container-small"><canvas></canvas></div>${renderTaskItemsHtml(card.tasks)}</div>`
+    return `<div class="task-progress"><div class="chart-container chart-container-small"><canvas></canvas></div>${renderTaskItemsDisclosureHtml(card.tasks)}</div>`
   }
   if (active?.kind === 'kpi-tiles' && card.kpi) return renderKpiTilesHtml(card.kpi)
-  if ((active?.kind === 'kpi-bar' || active?.kind === 'kpi-pie') && card.kpi) {
-    return '<div class="chart-container"><canvas></canvas></div>'
-  }
+  if (active?.kind === 'kpi-list' && card.kpi) return renderKpiListHtml(card.kpi)
+  if ((active?.kind === 'kpi-bar' || active?.kind === 'kpi-pie') && card.kpi) return CHART_CANVAS
   if (active?.kind === 'gauge' && card.metric) {
     return '<div class="chart-container chart-container-gauge"><canvas></canvas></div>'
   }
-  // ELEMENTS.md: a lone `Metric: value` line's *default* widget is already a
-  // stat tile, not the plain paragraph text every other element's "default" is.
-  if (viewId === 'default' && card.metric) return renderStatTileHtml(card.metric)
-  // A ```chart fence's *default* view is the explicit chart itself, not the
-  // raw config text — unless the card also has a real table, whose own
-  // default (the `<table>` in card.html) takes priority.
-  if (viewId === 'default' && card.chartFence && !card.table) {
-    return '<div class="chart-container"><canvas></canvas></div>'
+
+  if (viewId === 'default') {
+    // Chart-first: a table's default view is the auto-chosen chart, not the
+    // `<table>` it came from (which is now the "Table" alternative).
+    if (card.table && card.defaultChartType) return CHART_CANVAS
+    if (card.tasks?.length) {
+      return `<div class="task-progress">${renderProgressBarHtml(card.tasks)}${renderTaskItemsDisclosureHtml(card.tasks)}</div>`
+    }
+    if (card.kpi?.length) return renderKpiTilesHtml(card.kpi)
+    if (card.metric) return renderStatTileHtml(card.metric)
+    // A ```chart fence's default view is the explicit chart itself, unless the
+    // card also has a real table, whose own default chart takes priority.
+    if (card.chartFence && !card.table) return CHART_CANVAS
+    // A ```mermaid fence's default view is the rendered diagram; mounted async
+    // in mountActiveView since mermaid.render needs a live container.
+    if (card.mermaid) return '<div class="mermaid-container"></div>'
   }
-  // A ```mermaid fence's *default* view is the rendered diagram; mounted
-  // async in mountActiveView since mermaid.render needs a live container.
-  if (viewId === 'default' && card.mermaid) return '<div class="mermaid-container"></div>'
-  return card.html
+
+  return null
+}
+
+function renderCardBody(card: Card, viewId: string): string {
+  // The Markdown view is the transparency view — it shows everything, in full,
+  // unclamped. Clamping the very thing the user opened to inspect would defeat it.
+  if (viewId === 'markdown') return card.markdownHtml
+
+  const widget = renderWidget(card, viewId)
+  // Nothing chartable: the card *is* the text, de-emphasised and clamped.
+  if (widget === null) return clampHtml(card.html, 'card-prose-body')
+  return widget + renderCaptionHtml(card)
+}
+
+/**
+ * Reveals a "Read more" control only for clamped text that actually overflows,
+ * and wires it to expand/collapse inline. Must run *after* the body is in the
+ * DOM: whether 2 lines overflow is a layout question, so it can only be
+ * measured once the element has been laid out at its real card width.
+ */
+function wireReadMore(root: HTMLElement): void {
+  for (const clamp of root.querySelectorAll<HTMLElement>('.clamp')) {
+    const body = clamp.querySelector<HTMLElement>('.clamp-body')
+    const button = clamp.querySelector<HTMLButtonElement>('.read-more')
+    if (!body || !button) continue
+
+    if (body.scrollHeight <= body.clientHeight + 1) {
+      button.hidden = true
+      continue
+    }
+
+    button.hidden = false
+    button.addEventListener('click', () => {
+      const expanded = clamp.classList.toggle('expanded')
+      button.textContent = expanded ? 'Read less' : 'Read more'
+    })
+  }
 }
 
 /** Mounts (or tears down) the Chart.js instance for a card's *current* view — call after the body HTML above is already in the DOM, since Chart.js needs a live canvas element. */
 function mountActiveView(card: Card, viewId: string, bodyEl: HTMLElement): void {
-  const views = viewsFor(card)
-  const active = views.find((view) => view.id === viewId)
+  const active = viewsFor(card).find((view) => view.id === viewId)
   destroyChart(card.heading)
   destroyGauge(card.heading)
   const canvas = bodyEl.querySelector('canvas')
-  if (viewId === 'default' && card.chartFence && !card.table) {
+  const segmentsOf = (tasks: TaskItem[]) => tasks.map((task) => ({ label: taskLabel(task), done: task.done }))
+
+  // Chart-first: a table card's default view mounts its auto-chosen chart, and
+  // takes priority over a ```chart fence in the same card (as renderWidget does).
+  if (viewId === 'default' && card.table && card.defaultChartType) {
+    mountChart(card.heading, canvas!, card.table, card.defaultChartType)
+  } else if (viewId === 'default' && card.chartFence && !card.table) {
     mountChart(card.heading, canvas!, card.chartFence.table, card.chartFence.defaultType)
   } else if (active?.kind === 'chart' && card.chartFence && viewId.startsWith('fence-')) {
     mountChart(card.heading, canvas!, card.chartFence.table, viewId.slice('fence-'.length) as ChartType)
   } else if (active?.kind === 'chart' && card.table) {
     mountChart(card.heading, canvas!, card.table, active.id as ChartType)
   } else if (active?.kind === 'progress-donut' && card.tasks) {
-    mountChart(card.heading, canvas!, taskDonutData(card.tasks), 'donut')
+    mountTaskChart(card.heading, canvas!, segmentsOf(card.tasks), 'donut')
   } else if (active?.kind === 'kpi-bar' && card.kpi) {
     mountChart(card.heading, canvas!, kpiTableData(card.kpi), 'bar')
   } else if (active?.kind === 'kpi-pie' && card.kpi) {
@@ -267,6 +393,14 @@ function mountActiveView(card: Card, viewId: string, bodyEl: HTMLElement): void 
     const container = bodyEl.querySelector<HTMLElement>('.mermaid-container')
     if (container) void mountMermaid(card.heading, container, card.mermaid)
   }
+
+  // The segmented bar is plain DOM rather than Chart.js, so it needs its own
+  // tooltip wiring — and it shows up both as the explicit "Progress bar" view
+  // and as the chart-first default for any task card.
+  const progress = bodyEl.querySelector<HTMLElement>('.task-progress')
+  if (progress?.querySelector('.task-segments')) attachSegmentTooltip(progress)
+
+  wireReadMore(bodyEl)
 }
 
 function renderToggle(card: Card, viewId: string): string {
@@ -287,6 +421,26 @@ function renderToggle(card: Card, viewId: string): string {
   return `<div class="card-toggle" role="group" aria-label="View">${buttons}</div>`
 }
 
+// Global transparency view (ELEMENTS.md v2): the second tier alongside each
+// card's own Markdown mode — shows the whole original document at once, so the
+// source can be checked without opening every card individually.
+const DOCUMENT_MARKDOWN_STORAGE_KEY = 'md-dashboard:documentMarkdown'
+let showDocumentMarkdown = localStorage.getItem(DOCUMENT_MARKDOWN_STORAGE_KEY) === 'true'
+
+function applyMarkdownToggleState(): void {
+  markdownToggleEl.setAttribute('aria-pressed', String(showDocumentMarkdown))
+  markdownToggleEl.title = showDocumentMarkdown ? 'Show dashboard' : 'Show original Markdown'
+}
+
+markdownToggleEl.addEventListener('click', () => {
+  showDocumentMarkdown = !showDocumentMarkdown
+  localStorage.setItem(DOCUMENT_MARKDOWN_STORAGE_KEY, String(showDocumentMarkdown))
+  applyMarkdownToggleState()
+  if (lastMessage) renderCards(lastMessage)
+})
+
+applyMarkdownToggleState()
+
 function renderCards(message: ContentMessage): void {
   const { title, cards } = message
   lastMessage = message
@@ -299,15 +453,28 @@ function renderCards(message: ContentMessage): void {
   destroyAllGauges()
 
   if (cards.length === 0) {
+    contentEl.className = 'dashboard-grid'
     contentEl.innerHTML = `<p class="empty-state">No sections found. Add a "## Heading" to your Markdown file to create a card.</p>`
     return
   }
 
+  if (showDocumentMarkdown) {
+    contentEl.className = 'dashboard-document'
+    contentEl.innerHTML = cards
+      .map((card) => `<h2>${escapeHtml(card.heading)}</h2>${card.markdownHtml}`)
+      .join('')
+    return
+  }
+
+  contentEl.className = 'dashboard-grid'
   contentEl.innerHTML = cards
     .map((card) => {
       const viewId = storedViewId(card)
+      // Prose-only cards are de-emphasised so charts dominate the grid, but
+      // they are still shown — content is never silently dropped.
+      const proseClass = isChartable(card) ? '' : ' card-prose'
       return `
-        <section class="card" data-heading="${escapeHtml(card.heading)}">
+        <section class="card${proseClass}" data-heading="${escapeHtml(card.heading)}" data-default-chart="${card.defaultChartType ?? ''}">
           <div class="card-header">
             <h2 class="card-heading">${escapeHtml(card.heading)}</h2>
             ${renderToggle(card, viewId)}
