@@ -1,4 +1,5 @@
 import './style.css'
+import { CHART_VIEW_META, destroyAllCharts, destroyChart, mountChart, type ChartType, type TableData } from './widgets/chart-view.js'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div class="dashboard">
@@ -15,6 +16,8 @@ interface Card {
   heading: string
   html: string
   markdownHtml: string
+  table?: TableData
+  chartTypes?: ChartType[]
 }
 
 interface ContentMessage {
@@ -33,21 +36,27 @@ function isContentMessage(value: unknown): value is ContentMessage {
   )
 }
 
-// Per-card widget view toggle. Increments 7-10 will register more view ids
-// (chart types, progress, KPI, ...); for now every card offers just its
-// default widget render and the faithful "Markdown" raw-render mode.
+// Per-card widget view toggle. Increments 8-10 will register more view ids
+// (progress, KPI, ...); every card offers its default widget render and the
+// faithful "Markdown" raw-render mode, plus (Increment 7) one entry per chart
+// type valid for the card's table, if it has one.
 interface WidgetView {
   id: string
   label: string
   icon: string
-  html: string
+  isChart: boolean
 }
 
 function viewsFor(card: Card): WidgetView[] {
-  return [
-    { id: 'default', label: 'Widget', icon: '▦', html: card.html },
-    { id: 'markdown', label: 'Markdown', icon: '▤', html: card.markdownHtml },
+  const views: WidgetView[] = [
+    { id: 'default', label: 'Widget', icon: '▦', isChart: false },
+    { id: 'markdown', label: 'Markdown', icon: '▤', isChart: false },
   ]
+  for (const chartType of card.chartTypes ?? []) {
+    const meta = CHART_VIEW_META[chartType]
+    views.push({ id: chartType, label: meta.label, icon: meta.icon, isChart: true })
+  }
+  return views
 }
 
 const VIEW_STORAGE_PREFIX = 'md-dashboard:view:'
@@ -63,9 +72,23 @@ function setStoredViewId(heading: string, viewId: string): void {
 let lastCards: Card[] = []
 
 function renderCardBody(card: Card, viewId: string): string {
+  if (viewId === 'markdown') return card.markdownHtml
   const views = viewsFor(card)
-  const active = views.find((view) => view.id === viewId) ?? views[0]!
-  return active.html
+  const active = views.find((view) => view.id === viewId)
+  if (active?.isChart) return '<div class="chart-container"><canvas></canvas></div>'
+  return card.html
+}
+
+/** Mounts (or tears down) the Chart.js instance for a card's *current* view — call after the body HTML above is already in the DOM, since Chart.js needs a live canvas element. */
+function mountActiveView(card: Card, viewId: string, bodyEl: HTMLElement): void {
+  const views = viewsFor(card)
+  const active = views.find((view) => view.id === viewId)
+  if (active?.isChart && card.table) {
+    const canvas = bodyEl.querySelector('canvas')!
+    mountChart(card.heading, canvas, card.table, active.id as ChartType)
+  } else {
+    destroyChart(card.heading)
+  }
 }
 
 function renderToggle(card: Card, viewId: string): string {
@@ -89,6 +112,10 @@ function renderToggle(card: Card, viewId: string): string {
 function renderCards({ title, cards }: ContentMessage): void {
   lastCards = cards
   docTitleEl.textContent = title
+  // The whole grid (and every canvas in it) is about to be discarded — tear
+  // down existing Chart.js instances first so none are left mounted on
+  // detached canvases.
+  destroyAllCharts()
   contentEl.innerHTML = cards
     .map((card) => {
       const viewId = storedViewId(card.heading)
@@ -103,6 +130,14 @@ function renderCards({ title, cards }: ContentMessage): void {
       `
     })
     .join('')
+
+  // Sections were just built in the same order as `cards`, so zip by index
+  // rather than re-querying by heading (headings aren't guaranteed unique).
+  const sections = contentEl.querySelectorAll<HTMLElement>('.card')
+  cards.forEach((card, index) => {
+    const bodyEl = sections[index]?.querySelector<HTMLElement>('.card-body')
+    if (bodyEl) mountActiveView(card, storedViewId(card.heading), bodyEl)
+  })
 }
 
 // Event delegation: one listener survives every full-grid re-render from
@@ -121,7 +156,9 @@ contentEl.addEventListener('click', (event) => {
 
   setStoredViewId(heading, viewId)
   section!.querySelector('.card-toggle')!.outerHTML = renderToggle(card, viewId)
-  section!.querySelector('.card-body')!.innerHTML = renderCardBody(card, viewId)
+  const bodyEl = section!.querySelector<HTMLElement>('.card-body')!
+  bodyEl.innerHTML = renderCardBody(card, viewId)
+  mountActiveView(card, viewId, bodyEl)
 })
 
 function escapeHtml(text: string): string {

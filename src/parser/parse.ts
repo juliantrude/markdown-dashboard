@@ -1,14 +1,19 @@
 import MarkdownIt from 'markdown-it'
 import Token from 'markdown-it/lib/token.mjs'
+import { extractTableData, validChartTypes, type ChartType, type TableData } from './table.js'
 
 const md: MarkdownIt = new MarkdownIt({ html: false })
 
 export interface Card {
   heading: string
-  /** Default widget render (Increments 7-10 replace this per element type; for now identical to plain markdown-it output). */
+  /** Default widget render: for a table-bearing card this is already the plain `<table>` (ELEMENTS.md: default widget for Table is Table itself). */
   html: string
   /** Faithful "Markdown" raw-render mode (ELEMENTS.md): real lists, real (disabled) checkboxes for `- [ ]`/`- [x]`. */
   markdownHtml: string
+  /** Chart-ready data extracted from the card's first table, if any (Increment 7). */
+  table?: TableData
+  /** Chart types valid for `table`'s shape, per ELEMENTS.md ("only alternatives valid for the data shape"). */
+  chartTypes?: ChartType[]
 }
 
 export interface ParsedDocument {
@@ -75,9 +80,11 @@ export function parseDocument(markdown: string): ParsedDocument {
   const flush = (): void => {
     if (currentHeading !== null) {
       const html = md.renderer.render(currentTokens, md.options, {})
+      const table = extractTableData(currentTokens) ?? undefined
+      const chartTypes = table ? validChartTypes(table) : undefined
       markCheckboxes(currentTokens)
       const markdownHtml = md.renderer.render(currentTokens, md.options, {})
-      cards.push({ heading: currentHeading, html, markdownHtml })
+      cards.push({ heading: currentHeading, html, markdownHtml, table, chartTypes })
     }
     currentHeading = null
     currentTokens = []

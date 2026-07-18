@@ -17,8 +17,11 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   path of the same HTTP server: on connection it sends the current file,
   parsed, once, and on every file-watch change it broadcasts the fresh parsed
   document to all open sockets. Never writes to the target file. The payload
-  is `{ type: 'content', title: string, cards: { heading: string, html: string }[] }`
-  — `title`/`cards` come straight from `src/parser/parse.ts`.
+  is `{ type: 'content', title: string, cards: Card[] }` — `title`/`cards`
+  come straight from `src/parser/parse.ts`; `Card` is `{ heading, html,
+  markdownHtml, table?, chartTypes? }` (`table`/`chartTypes` only present when
+  the card's first table yields chartable data — see `src/parser/table.ts`
+  below).
 - **`src/server/open-browser.ts`** (present) — best-effort cross-platform
   "open the default URL in the browser", swallowing failures (headless/CI
   environments) since the URL is always printed too.
@@ -34,30 +37,74 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   section's tokens. The first `#` heading becomes `title`, not a card;
   content before the first `##` (other than that title) is dropped — every
   card lives under a `##` boundary. Each card carries **two** renders:
-  `html` (the default widget — currently plain markdown-it output; per-type
-  widgets replace this in Increments 7–10) and `markdownHtml` (the faithful
-  "Markdown" raw-render mode from `ELEMENTS.md` — same tokens, rendered a
-  second time after `markCheckboxes()` mutates `- [ ]`/`- [x]` list items
-  into real, disabled `<input type="checkbox">` elements). `html` is always
-  rendered *before* the mutation runs, since both renders share one token
-  array.
-- **`src/widgets/`** (planned, Increments 7–10) — one module per data
-  widget type (table, task-list, numeric/KPI, mermaid, chart). Each widget
-  knows how to render its default view and its shape-valid alternative views
-  (from `ELEMENTS.md`); they plug into the generic toggle framework already
-  present in `src/main.ts` (below) by contributing additional `WidgetView`
-  entries per card. Toggle state is read/written to `localStorage` only —
-  widgets never mutate the source file.
+  `html` (the default widget — plain markdown-it output; per-type widgets
+  beyond the table case replace this in Increments 8–10) and `markdownHtml`
+  (the faithful "Markdown" raw-render mode from `ELEMENTS.md` — same tokens,
+  rendered a second time after `markCheckboxes()` mutates `- [ ]`/`- [x]`
+  list items into real, disabled `<input type="checkbox">` elements). `html`
+  is always rendered *before* the mutation runs, since both renders share one
+  token array. It also calls `src/parser/table.ts`'s `extractTableData` on
+  the same (pre-mutation) tokens to look for the card's first table.
+- **`src/parser/table.ts`** (present, Increment 7) — server-side table→chart
+  extraction. `extractTableData` walks a card's token stream for the first
+  `table_open`…`table_close` block, takes the first column as `categories`
+  and every other column as a numeric `series` only if *every* row in that
+  column parses as a number (`ELEMENTS.md`: "only alternatives valid for the
+  data shape" — a single non-numeric cell drops that whole column). Only the
+  card's first table drives its chart widget; a second table in the same
+  card is not currently supported. `validChartTypes(table)` then decides
+  which of the nine `ChartType`s in `ELEMENTS.md` fit that shape — rules
+  decided in Increment 7 (no prior source to follow):
+  - `bar` — single-series only (a multi-series table must pick grouped or
+    stacked rather than collapsing to one series).
+  - `bar-grouped` / `bar-stacked` — need 2+ numeric series.
+  - `line` / `area` — need 2+ categories (a single point isn't a trend).
+  - `pie` / `donut` — single-series only, need 2+ categories.
+  - `radar` — needs 3+ categories (axes).
+  - `scatter` — needs 2+ numeric series (only the first two are plotted,
+    as an x/y pair).
+- **`src/widgets/chart-view.ts`** (present, Increment 7; more widget modules
+  land in Increments 8–10) — client-side Chart.js integration. Registers
+  Chart.js's `registerables` once, then `mountChart(heading, canvas, table,
+  chartType)` builds one of nine `ChartConfiguration`s (bar/grouped/stacked
+  share one builder; line/area share one; pie/donut share one; radar and
+  scatter are their own) and tracks the resulting `Chart` instance keyed by
+  card heading so it can be `destroy()`-ed before the canvas is replaced —
+  `destroyAllCharts()` clears every tracked chart ahead of a full-grid
+  rebuild (live reload), `destroyChart(heading)` clears one when a single
+  card's toggle switches away from a chart view. Colors come from the
+  dataviz skill's validated 8-slot categorical palette (fixed order, never
+  cycled — past 8 series/categories `foldToOther` sums the rest into a
+  trailing "Other" slot), read at mount time from the `--series-1..8` /
+  `--chart-text-*` / `--chart-grid` CSS custom properties in `src/style.css`
+  (light/dark values already switch with `prefers-color-scheme`, matching
+  the rest of the shell). Legend follows the skill's rule: shown whenever a
+  chart has 2+ series, and always for pie/donut (color there identifies the
+  category, not a series). Chart lib decision, logged here since it was
+  never made in Increments 1–2 as the North Star intended: **Chart.js** —
+  its built-in bar/line/pie/doughnut/radar/scatter types cover every
+  `ELEMENTS.md` chart alternative without a plugin, it's a small,
+  browser-only dependency with no Node-version constraints (unlike
+  chokidar/Vite, which are pinned for the Node 18 runtime), and its
+  imperative `new Chart(canvas, config)` / `chart.destroy()` API maps
+  directly onto this project's per-card mount/toggle/rebuild lifecycle.
+  ECharts was the other candidate; passed over as heavier and more
+  configuration-first than this project needs.
 - **`src/main.ts`** (present) — client bootstrap; renders the static
   "Dashboard" shell (`<h1>`, unaffected by document content — see
   `tests/smoke.spec.ts`), a `#doc-title` subtitle for the parsed `#` title,
   and a `#content` grid container. Opens the `/ws` WebSocket connection and,
   on each `content` message, sets `#doc-title` and rebuilds `#content` as one
   `.card` per section: a `.card-header` (heading + toggle) and a
-  `.card-body`. **Widget toggle framework (present, Increment 6):** each card
-  builds a small `WidgetView[]` (currently `default` → `card.html`,
-  `markdown` → `card.markdownHtml`; Increments 7–10 add more ids per card,
-  e.g. chart types) and renders one icon button per view, top-right of the
+  `.card-body`. **Widget toggle framework (present, Increment 6; extended
+  Increment 7):** each card builds a small `WidgetView[]` — always `default`
+  → `card.html` and `markdown` → `card.markdownHtml`, plus (Increment 7) one
+  entry per `card.chartTypes[]` id, rendered as `<div class="chart-container">
+  <canvas></canvas></div>` and mounted via `chart-view.ts`'s `mountChart`
+  right after that HTML lands in the DOM (`mountActiveView`, called from both
+  the full-grid rebuild and the toggle click handler) — Chart.js needs a live
+  canvas element, so chart views can't be pure HTML strings the way
+  `default`/`markdown` are. One icon button per view renders top-right of the
   card. The selected view id is looked up/stored in `localStorage` keyed by
   `md-dashboard:view:<heading>`, so it survives both a live-reload push and a
   full page reload; a card's heading is assumed unique within a document (not
@@ -67,8 +114,15 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   is already markdown-it's own escaped output.
 - **`src/style.css`** (present) — shell styling, including the responsive
   `.dashboard-grid`/`.card` layout (`auto-fill`/`minmax` grid, no fixed
-  breakpoints yet); will grow to cover explicit breakpoints and light/dark
-  theming (Increment 11).
+  breakpoints yet) and the chart categorical palette as CSS custom
+  properties (`--series-1..8`, `--chart-text-primary/secondary`,
+  `--chart-grid`; light values under the existing `prefers-color-scheme:
+  light` block). `.card-header`/`.card-toggle` wrap (`flex-wrap: wrap`) since
+  Increment 7 pushed a card's toggle row up to 8 buttons wide, which
+  overflowed a 280px card and visually spilled into the next grid column
+  before this was added (caught by `tests/table.spec.ts`, not by eye). Will
+  grow to cover explicit breakpoints and a manual light/dark toggle
+  (Increment 11).
 
 ## Live-reload flow
 
@@ -95,12 +149,15 @@ Two independent TypeScript builds share `src/` but never mix:
 - **Browser bundle** — `tsconfig.json` (DOM lib, `noEmit`, no ambient
   `@types/node`) type-checks `src/main.ts` + `src/style.css`'s imports; `vite
   build` does the actual bundling into `dist/` (the shell the server serves).
-  `src/cli.ts` and `src/server/` are excluded from this config.
+  `src/cli.ts`, `src/server/`, and `src/parser/` are excluded from this
+  config (they run server-side only); `src/widgets/chart-view.ts` is
+  browser-only and stays in it, so it re-declares its own `ChartType`/
+  `TableData` types rather than importing `src/parser/table.ts`'s.
 - **CLI/server bundle** — `tsconfig.server.json` (Node lib + types,
-  `NodeNext` module resolution) compiles `src/cli.ts` and `src/server/**` to
-  `dist-server/`. `bin/md-dashboard.js` is a plain JS shebang wrapper that
-  imports `dist-server/cli.js`; this is what the `bin` field in
-  `package.json` points at.
+  `NodeNext` module resolution) compiles `src/cli.ts`, `src/server/**`, and
+  `src/parser/**` to `dist-server/`. `bin/md-dashboard.js` is a plain JS
+  shebang wrapper that imports `dist-server/cli.js`; this is what the `bin`
+  field in `package.json` points at.
 
 `npm run build` runs both (`tsc && vite build && tsc -p tsconfig.server.json`);
 `npm run typecheck` type-checks both without emitting.
@@ -126,7 +183,14 @@ Two independent TypeScript builds share `src/` but never mix:
   `widgets.spec.ts` serves `tests/fixtures/widgets.md` (a task list) to
   verify the toggle switches between the default render (no checkboxes yet)
   and the Markdown raw-render mode (real, disabled checkboxes reflecting
-  done/open state), and that the chosen view survives a full page reload.
+  done/open state), and that the chosen view survives a full page reload;
+  `table.spec.ts` serves `tests/fixtures/tables.md` (a single-series table, a
+  two-series table, and a table-less prose section) to verify: the
+  single-series table offers Bar/Pie/Donut/Line/Area/Radar but not
+  Grouped/Stacked Bar or Scatter and a canvas mounts on toggle; the
+  two-series table offers Grouped Bar/Stacked Bar/Scatter but not plain
+  Bar/Pie; a table-less card offers no chart toggles at all; and the chosen
+  chart view survives a full page reload, same as `widgets.spec.ts`.
 
 ## Source of truth
 
