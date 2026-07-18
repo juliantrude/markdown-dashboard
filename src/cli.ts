@@ -1,10 +1,11 @@
 import { existsSync, statSync } from 'node:fs'
-import { extname, resolve } from 'node:path'
+import { basename, extname, resolve } from 'node:path'
+import { discoverMarkdownFiles, type DiscoveredFile } from './server/discover.js'
 import { openBrowser } from './server/open-browser.js'
 import { startServer } from './server/server.js'
 
 interface CliOptions {
-  filePath: string
+  targetPath: string
   port: number
   open: boolean
 }
@@ -13,12 +14,12 @@ const DEFAULT_PORT = 4173
 
 function printUsageAndExit(message?: string): never {
   if (message) console.error(`md-dashboard: ${message}`)
-  console.error('usage: md-dashboard <file.md> [--port <number>] [--no-open]')
+  console.error('usage: md-dashboard <file.md|folder> [--port <number>] [--no-open]')
   process.exit(1)
 }
 
 function parseArgs(argv: string[]): CliOptions {
-  let fileArg: string | undefined
+  let targetArg: string | undefined
   let port = DEFAULT_PORT
   let open = true
 
@@ -35,30 +36,40 @@ function parseArgs(argv: string[]): CliOptions {
       open = false
     } else if (arg.startsWith('-')) {
       printUsageAndExit(`unknown option: ${arg}`)
-    } else if (!fileArg) {
-      fileArg = arg
+    } else if (!targetArg) {
+      targetArg = arg
     } else {
       printUsageAndExit(`unexpected argument: ${arg}`)
     }
   }
 
-  if (!fileArg) printUsageAndExit('missing required <file.md> argument')
+  if (!targetArg) printUsageAndExit('missing required <file.md|folder> argument')
 
-  return { filePath: resolve(process.cwd(), fileArg), port, open }
+  return { targetPath: resolve(process.cwd(), targetArg), port, open }
 }
 
 async function main(): Promise<void> {
-  const { filePath, port, open } = parseArgs(process.argv.slice(2))
+  const { targetPath, port, open } = parseArgs(process.argv.slice(2))
 
-  if (!existsSync(filePath) || !statSync(filePath).isFile()) {
-    printUsageAndExit(`file not found: ${filePath}`)
-  }
-  if (extname(filePath) !== '.md') {
-    printUsageAndExit(`expected a .md file, got: ${filePath}`)
+  if (!existsSync(targetPath)) {
+    printUsageAndExit(`path not found: ${targetPath}`)
   }
 
-  const { url } = await startServer({ filePath, port })
-  console.log(`md-dashboard: serving ${filePath}`)
+  const stat = statSync(targetPath)
+  let files: DiscoveredFile[]
+
+  if (stat.isDirectory()) {
+    files = discoverMarkdownFiles(targetPath)
+    if (files.length === 0) printUsageAndExit(`no .md files found in directory: ${targetPath}`)
+  } else {
+    if (extname(targetPath) !== '.md') {
+      printUsageAndExit(`expected a .md file or a folder, got: ${targetPath}`)
+    }
+    files = [{ id: basename(targetPath), absPath: targetPath }]
+  }
+
+  const { url } = await startServer({ files, port })
+  console.log(`md-dashboard: serving ${files.length} file(s) from ${targetPath}`)
   console.log(`md-dashboard: dashboard running at ${url}`)
   if (open) openBrowser(url)
 }

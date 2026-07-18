@@ -4,13 +4,15 @@ A CLI tool that turns a single Markdown file into a responsive, live-updating
 web dashboard.
 
 Run `md-dashboard <file.md>`, and every `##` section in that file becomes a
-card in a responsive grid. Tables, task lists, numeric lists, and single
-metrics render as data widgets that can be toggled at runtime between
-equivalent chart types and a faithful "Markdown" raw-render mode. Edit the
-file in your editor and the dashboard updates live over WebSocket in well
-under a second — no manual reload, and each widget keeps whatever view you
-toggled it to. The tool is **read-only** toward your content: it never writes
-back to the Markdown file.
+card in a responsive grid. Point it at a folder instead and it watches every
+`.md` file inside (recursively), adding a sidebar to switch between them —
+each file gets its own dashboard. Tables, task lists, numeric lists, and
+single metrics render as data widgets that can be toggled at runtime between
+equivalent chart types and a faithful "Markdown" raw-render mode. Edit a file
+in your editor and the dashboard updates live over WebSocket in well under a
+second — no manual reload, and each widget keeps whatever view you toggled it
+to. The tool is **read-only** toward your content: it never writes back to
+any Markdown file.
 
 ![Dashboard in dark mode](docs/screenshots/dashboard-dark.png)
 
@@ -18,6 +20,9 @@ back to the Markdown file.
 
 - **One Markdown file in, one dashboard out** — no config, no build step for
   your content. `##` headings become cards automatically.
+- **Folder mode** — point it at a directory instead of a file and every `.md`
+  file inside (recursively) gets watched and listed in a sidebar; picking one
+  switches the dashboard with no server round-trip.
 - **Every Markdown element renders to a sensible default widget** — prose,
   headings, blockquotes, code blocks, images, horizontal rules, tables, task
   lists, numeric/key-value lists, single metrics, ` ```mermaid ` diagrams, and
@@ -60,20 +65,27 @@ the server is running and watch the dashboard update live.
 |---|---|
 | ![A table toggled to a grouped bar chart](docs/screenshots/dashboard-toggle.png) | ![Dashboard in light mode](docs/screenshots/dashboard-light.png) |
 
-Run it against your own file the same way:
+Run it against your own file — or a folder of them — the same way:
 
 ```sh
 node bin/md-dashboard.js path/to/notes.md [--port <number>] [--no-open]
+node bin/md-dashboard.js path/to/notes-folder [--port <number>] [--no-open]
 ```
 
 - `--port <number>` — pick the local port (defaults to `4173`).
 - `--no-open` — don't launch a browser automatically (useful in CI/headless
   environments).
 
+Pointing at a folder recursively watches every `.md` file inside it and adds
+a sidebar to switch between them; the file set is fixed at startup (files
+added to the folder while it's running aren't picked up).
+
 ## How it works
 
-- **CLI** (`src/cli.ts`) parses the target file path and options, then starts
-  a local HTTP + WebSocket server (`src/server`).
+- **CLI** (`src/cli.ts`) parses the target path and options; a folder is
+  expanded to every `.md` file inside it (`src/server/discover.ts`), a single
+  file is treated as a one-file folder, and either way the result starts a
+  local HTTP + WebSocket server (`src/server`).
 - **Parser** (`src/parser`) uses `markdown-it` to split the document into
   cards on `##` boundaries and extract the data shape behind each widget
   (table series, task items, KPI/metric values, mermaid source, chart-fence
@@ -100,7 +112,7 @@ npm test           # Playwright E2E smoke suite
 
 ## Status
 
-All core functionality — CLI, live reload, the full widget/chart-toggle set,
-theming, and responsive layout — is implemented and covered by the
-Playwright E2E suite (`npm test`). See `GOAL.md` for the remaining polish
-items (folder support, docs).
+All core functionality — CLI (single file or folder), live reload, the full
+widget/chart-toggle set, theming, and responsive layout — is implemented and
+covered by the Playwright E2E suite (`npm test`). See `GOAL.md` for the
+closeout sweep.

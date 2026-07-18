@@ -5,7 +5,8 @@ import { dirname, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { parseDocument, type ParsedDocument } from '../parser/parse.js'
-import { watchFile, type FileWatcher } from './watch.js'
+import type { DiscoveredFile } from './discover.js'
+import { watchFiles, type FileWatcher } from './watch.js'
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -21,7 +22,8 @@ const MIME_TYPES: Record<string, string> = {
 const staticDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'dist')
 
 export interface StartServerOptions {
-  filePath: string
+  /** One entry in single-file mode, or every discovered `.md` file in folder mode. */
+  files: DiscoveredFile[]
   port: number
 }
 
@@ -32,11 +34,14 @@ export interface StartedServer {
 }
 
 /**
- * Serves the built dashboard shell (`dist/`) and confirms the target
- * Markdown file is readable. The tool never writes to that file.
+ * Serves the built dashboard shell (`dist/`) and confirms every target
+ * Markdown file is readable. The tool never writes to those files. Single-
+ * file mode is just folder mode with one file — the WS protocol and the
+ * client both treat them identically; the sidebar only renders once there's
+ * more than one file (see src/main.ts).
  */
-export async function startServer({ filePath, port }: StartServerOptions): Promise<StartedServer> {
-  await readFile(filePath, 'utf-8')
+export async function startServer({ files, port }: StartServerOptions): Promise<StartedServer> {
+  for (const file of files) await readFile(file.absPath, 'utf-8')
 
   if (!existsSync(join(staticDir, 'index.html'))) {
     throw new Error(`built assets not found at "${staticDir}" — run "npm run build" first`)
@@ -68,9 +73,15 @@ export async function startServer({ filePath, port }: StartServerOptions): Promi
 
   const wss = new WebSocketServer({ server, path: '/ws' })
   const clients = new Set<WebSocket>()
+  const idByAbsPath = new Map(files.map((file) => [file.absPath, file.id]))
+  const fileIds = files.map((file) => file.id)
 
-  const send = (socket: WebSocket, doc: ParsedDocument): void => {
-    socket.send(JSON.stringify({ type: 'content', ...doc }))
+  const sendFileList = (socket: WebSocket): void => {
+    socket.send(JSON.stringify({ type: 'files', files: fileIds }))
+  }
+
+  const sendContent = (socket: WebSocket, fileId: string, doc: ParsedDocument): void => {
+    socket.send(JSON.stringify({ type: 'content', file: fileId, ...doc }))
   }
 
   // The Markdown file is user input edited outside this process — parsing it
@@ -86,24 +97,34 @@ export async function startServer({ filePath, port }: StartServerOptions): Promi
     }
   }
 
+  const loadAndSend = (socket: WebSocket, file: DiscoveredFile): void => {
+    readFile(file.absPath, 'utf-8')
+      .then((content) => {
+        const doc = safeParse(content)
+        if (doc) sendContent(socket, file.id, doc)
+      })
+      .catch((error: unknown) => console.error(`md-dashboard: failed to send initial content for ${file.id}:`, error))
+  }
+
   wss.on('connection', (socket) => {
     clients.add(socket)
     socket.on('close', () => clients.delete(socket))
-    readFile(filePath, 'utf-8')
-      .then((content) => {
-        const doc = safeParse(content)
-        if (doc) send(socket, doc)
-      })
-      .catch((error: unknown) => console.error('md-dashboard: failed to send initial content:', error))
+    sendFileList(socket)
+    for (const file of files) loadAndSend(socket, file)
   })
 
-  const fileWatcher: FileWatcher = watchFile(filePath, (content) => {
-    const doc = safeParse(content)
-    if (!doc) return
-    for (const client of clients) {
-      if (client.readyState === client.OPEN) send(client, doc)
-    }
-  })
+  const fileWatcher: FileWatcher = watchFiles(
+    files.map((file) => file.absPath),
+    (absPath, content) => {
+      const fileId = idByAbsPath.get(absPath)
+      if (!fileId) return
+      const doc = safeParse(content)
+      if (!doc) return
+      for (const client of clients) {
+        if (client.readyState === client.OPEN) sendContent(client, fileId, doc)
+      }
+    },
+  )
 
   await new Promise<void>((resolvePromise, reject) => {
     server.once('error', reject)

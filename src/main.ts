@@ -18,14 +18,20 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <h1>Dashboard</h1>
       <button id="theme-toggle" type="button" class="theme-toggle" aria-label="Toggle color theme"></button>
     </div>
-    <p id="doc-title" class="dashboard-subtitle"></p>
-    <div id="content" class="dashboard-grid"></div>
+    <div class="dashboard-body">
+      <nav id="file-nav" class="file-nav" aria-label="Markdown files" hidden></nav>
+      <div class="dashboard-main">
+        <p id="doc-title" class="dashboard-subtitle"></p>
+        <div id="content" class="dashboard-grid"></div>
+      </div>
+    </div>
   </div>
 `
 
 const docTitleEl = document.querySelector<HTMLParagraphElement>('#doc-title')!
 const contentEl = document.querySelector<HTMLDivElement>('#content')!
 const themeToggleEl = document.querySelector<HTMLButtonElement>('#theme-toggle')!
+const fileNavEl = document.querySelector<HTMLElement>('#file-nav')!
 
 // --- Theme: default from prefers-color-scheme, manual toggle overrides it,
 // override persists in localStorage. index.html's inline script already set
@@ -90,6 +96,7 @@ interface Card {
 
 interface ContentMessage {
   type: 'content'
+  file: string
   title: string
   cards: Card[]
 }
@@ -99,10 +106,37 @@ function isContentMessage(value: unknown): value is ContentMessage {
     typeof value === 'object' &&
     value !== null &&
     (value as { type?: unknown }).type === 'content' &&
+    typeof (value as { file?: unknown }).file === 'string' &&
     typeof (value as { title?: unknown }).title === 'string' &&
     Array.isArray((value as { cards?: unknown }).cards)
   )
 }
+
+interface FilesMessage {
+  type: 'files'
+  files: string[]
+}
+
+function isFilesMessage(value: unknown): value is FilesMessage {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { type?: unknown }).type === 'files' &&
+    Array.isArray((value as { files?: unknown }).files)
+  )
+}
+
+// Folder support (Increment 13): the server always sends a `files` list (one
+// entry in single-file mode too — single-file is just folder mode with one
+// file) followed by one `content` message per file. `documents` caches the
+// last content pushed for every file so switching the sidebar selection is
+// instant, with no round-trip; only the currently `selectedFile`'s cards are
+// ever rendered into `#content`. The sidebar itself only renders once there's
+// more than one file, so single-file mode's DOM/UX is unchanged.
+const SELECTED_FILE_STORAGE_KEY = 'md-dashboard:selectedFile'
+const documents = new Map<string, ContentMessage>()
+let knownFiles: string[] = []
+let selectedFile: string | null = null
 
 // Per-card widget view toggle. Every card offers its default widget render
 // and the faithful "Markdown" raw-render mode, plus (Increment 7) one entry
@@ -318,6 +352,54 @@ function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!)
 }
 
+function renderFileNav(): void {
+  // Single-file mode (the common case) shows no sidebar at all, so its
+  // layout/DOM is unchanged from before folder support.
+  if (knownFiles.length <= 1) {
+    fileNavEl.hidden = true
+    fileNavEl.innerHTML = ''
+    return
+  }
+  fileNavEl.hidden = false
+  fileNavEl.innerHTML = knownFiles
+    .map(
+      (file) => `
+        <button type="button" class="file-nav-btn" data-file="${escapeHtml(file)}" aria-pressed="${file === selectedFile}">
+          ${escapeHtml(file)}
+        </button>
+      `,
+    )
+    .join('')
+}
+
+function selectFile(file: string): void {
+  if (file === selectedFile) return
+  selectedFile = file
+  localStorage.setItem(SELECTED_FILE_STORAGE_KEY, file)
+  renderFileNav()
+  const doc = documents.get(file)
+  if (doc) renderCards(doc)
+}
+
+fileNavEl.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('.file-nav-btn')
+  if (button?.dataset.file) selectFile(button.dataset.file)
+})
+
+function handleFilesMessage(message: FilesMessage): void {
+  knownFiles = message.files
+  if (!selectedFile || !knownFiles.includes(selectedFile)) {
+    const stored = localStorage.getItem(SELECTED_FILE_STORAGE_KEY)
+    selectedFile = (stored && knownFiles.includes(stored) ? stored : knownFiles[0]) ?? null
+  }
+  renderFileNav()
+}
+
+function handleContentMessage(message: ContentMessage): void {
+  documents.set(message.file, message)
+  if (message.file === selectedFile) renderCards(message)
+}
+
 // Reconnects on drop (e.g. server restart) so live reload keeps working
 // without a manual page refresh.
 function connectLiveReload(): void {
@@ -326,7 +408,8 @@ function connectLiveReload(): void {
 
   socket.addEventListener('message', (event) => {
     const message: unknown = JSON.parse(event.data as string)
-    if (isContentMessage(message)) renderCards(message)
+    if (isFilesMessage(message)) handleFilesMessage(message)
+    else if (isContentMessage(message)) handleContentMessage(message)
   })
 
   socket.addEventListener('close', () => {

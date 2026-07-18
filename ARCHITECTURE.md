@@ -6,21 +6,40 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
 
 ## Modules
 
-- **`src/cli.ts`** (present) — entrypoint for `md-dashboard <file.md>`.
-  Parses argv (`--port`, `--no-open`), validates the target file exists and
-  is `.md`, starts the HTTP server, opens the default browser at the served
-  URL. Compiled separately from the browser bundle (see Build below) and
-  invoked via `bin/md-dashboard.js`.
+- **`src/cli.ts`** (present) — entrypoint for `md-dashboard <file.md|folder>`.
+  Parses argv (`--port`, `--no-open`), then branches on whether the target
+  path is a file or a directory (Increment 13): a file must be `.md` and
+  becomes a single-entry `DiscoveredFile[]` (`id` = its basename); a
+  directory is handed to `src/server/discover.ts`'s `discoverMarkdownFiles`
+  and errors out if it contains none. Either way the result is a
+  `DiscoveredFile[]` passed to `startServer` — single-file mode is just
+  folder mode with one file, not a separate code path. Starts the HTTP
+  server, opens the default browser at the served URL. Compiled separately
+  from the browser bundle (see Build below) and invoked via
+  `bin/md-dashboard.js`.
+- **`src/server/discover.ts`** (present, Increment 13) — `discoverMarkdownFiles(rootDir)`
+  recursively walks a directory (skipping dotfiles/dirs and `node_modules`)
+  and returns every `.md` file as `{ id, absPath }`, `id` being the
+  forward-slashed path relative to `rootDir` (used as the file's identifier
+  in the WS protocol and as its sidebar label) — sorted by `id` so sidebar
+  order is stable across restarts. The file set is fixed at CLI startup;
+  files added to the folder afterward are not picked up (out of scope for
+  this increment, noted as a deliberate limit, not an oversight).
 - **`src/server/server.ts`** (present) — local HTTP server that serves the
-  built dashboard shell (`dist/index.html` + assets) and confirms the target
-  Markdown file is readable. Also runs a `ws` `WebSocketServer` on the `/ws`
-  path of the same HTTP server: on connection it sends the current file,
-  parsed, once, and on every file-watch change it broadcasts the fresh parsed
-  document to all open sockets. Never writes to the target file. The payload
-  is `{ type: 'content', title: string, cards: Card[] }` — `title`/`cards`
-  come straight from `src/parser/parse.ts`; `Card` is `{ heading, html,
-  markdownHtml, table?, chartTypes?, tasks?, kpi?, metric?, mermaid?,
-  chartFence? }`
+  built dashboard shell (`dist/index.html` + assets) and confirms every
+  target Markdown file is readable. Also runs a `ws` `WebSocketServer` on the
+  `/ws` path of the same HTTP server. On connection it sends a
+  `{ type: 'files', files: string[] }` message (every discovered file's
+  `id`, one entry in single-file mode too) followed by one
+  `{ type: 'content', file: string, title: string, cards: Card[] }` message
+  per file (Increment 13 renamed this from the old single-document payload,
+  which had no `file` field). On a watched file's change, only that file's
+  fresh `content` message is broadcast to every open socket — the client
+  keeps its own cache of every file's last-pushed document (see
+  `src/main.ts` below) so a sidebar switch never needs a round trip.
+  `title`/`cards` come straight from `src/parser/parse.ts`; `Card` is
+  `{ heading, html, markdownHtml, table?, chartTypes?, tasks?, kpi?, metric?,
+  mermaid?, chartFence? }`
   (`table`/`chartTypes` only present when the card's first table yields
   chartable data — see `src/parser/table.ts` below; `tasks` only present when
   the card contains `- [ ]`/`- [x]` items — see `src/parser/tasklist.ts`
@@ -33,18 +52,21 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   the target file is user input edited outside this process, a system
   boundary, so a parse failure (or a read mid-save) must never crash the
   server or the watcher — on failure, no message is sent and whatever was
-  last broadcast keeps showing. A well-formed but section-less document (no
-  `##` cards) is not an error — it's sent normally with `cards: []`, and the
-  client renders a friendly empty state instead of a blank grid.
+  last broadcast for that file keeps showing. A well-formed but section-less
+  document (no `##` cards) is not an error — it's sent normally with
+  `cards: []`, and the client renders a friendly empty state instead of a
+  blank grid. Never writes to any target file.
 - **`src/server/open-browser.ts`** (present) — best-effort cross-platform
   "open the default URL in the browser", swallowing failures (headless/CI
   environments) since the URL is always printed too.
 - **`src/server/watch.ts`** (present) — wraps `chokidar` (pinned to v4;
-  v5 requires Node ≥20.19 and this machine runs Node 18.19.1) on the target
-  `.md` file and invokes a callback with the fresh file content on `change`
-  and `add` (editors that save atomically emit `unlink`+`add` instead of
-  `change`), with `awaitWriteFinish` so partial writes are never read.
-  Folder watching is Increment 13.
+  v5 requires Node ≥20.19 and this machine runs Node 18.19.1) to watch a
+  fixed list of `.md` file paths (Increment 13 renamed `watchFile` to
+  `watchFiles` and generalized it from one path to an array — chokidar
+  accepts either natively) and invokes a callback with the changed file's
+  absolute path and fresh content on `change` and `add` (editors that save
+  atomically emit `unlink`+`add` instead of `change`), with
+  `awaitWriteFinish` so partial writes are never read.
 - **`src/parser/parse.ts`** (present) — wraps `markdown-it` (`html: false`) to
   parse the file into a token stream, then splits on `##` boundaries into an
   ordered list of `Card` models, rendered via `md.renderer.render` on that
@@ -216,8 +238,24 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
 - **`src/main.ts`** (present) — client bootstrap; renders the static
   "Dashboard" shell (`<h1>`, unaffected by document content — see
   `tests/smoke.spec.ts`), a `#theme-toggle` button beside it (Increment 11),
-  a `#doc-title` subtitle for the parsed `#` title, and a `#content` grid
-  container. **Theme module (present, Increment 11):** resolves the initial
+  a `#file-nav` sidebar (Increment 13), and a `.dashboard-main` containing a
+  `#doc-title` subtitle for the parsed `#` title and a `#content` grid
+  container. **Folder navigation (present, Increment 13):** the WS handler
+  branches on the message's `type` — a `files` message replaces `knownFiles`
+  and, if `selectedFile` is unset or no longer in the list, resolves it from
+  `localStorage`'s `md-dashboard:selectedFile` or else the first file, then
+  calls `renderFileNav()`; a `content` message caches itself into the
+  `documents: Map<string, ContentMessage>` keyed by `file` and only calls
+  `renderCards` if it's for the currently selected file. `renderFileNav()`
+  hides `#file-nav` entirely (`hidden` attribute) whenever `knownFiles.length
+  <= 1`, so single-file mode's DOM and layout are byte-for-byte what they
+  were before this increment. Clicking a sidebar button calls `selectFile`,
+  which stores the choice and re-renders from the cached `documents` entry
+  with **no server round-trip** — the server already pushed every file's
+  content right after `files` on connect, and pushes a fresh `content` for
+  just the changed file on every subsequent edit (see `server.ts` above), so
+  the client never needs to ask for a file's content explicitly. **Theme
+  module (present, Increment 11):** resolves the initial
   theme from `localStorage`'s `md-dashboard:theme` override, falling back to
   `matchMedia('(prefers-color-scheme: dark)')` — `index.html` runs the same
   resolution inline, synchronously, before first paint, so there's no flash
@@ -323,25 +361,36 @@ target architecture from the `GOAL.md` plan; modules not yet built are marked
   `.mermaid-container`/`.mermaid-error` rules (the former centers the SVG and
   scrolls horizontally rather than clipping an oversized diagram; the latter
   colors the inline parse-error message with the palette's slot-3 hue), and
-  the Increment 11 `.dashboard-header`/`.theme-toggle`/`.empty-state` rules.
+  the Increment 11 `.dashboard-header`/`.theme-toggle`/`.empty-state` rules,
+  and the Increment 13 `.dashboard-body`/`.file-nav`/`.file-nav-btn`/
+  `.dashboard-main` rules — `.dashboard-body` is a flex row (sidebar +
+  main content) that collapses to a column with the sidebar as a wrapped
+  button row at `max-width: 640px`, same breakpoint as the card grid's
+  single-column collapse; `.file-nav[hidden]` (the `hidden` attribute, set
+  by `src/main.ts` whenever there's only one file) removes the sidebar
+  entirely rather than just visually hiding it, so single-file mode's layout
+  is unaffected.
 
 ## Live-reload flow
 
-1. `chokidar` (`src/server/watch.ts`) watches the target `.md` file for
-   changes. **(present)**
-2. On change, the server re-reads the file, re-parses it with
-   `src/parser/parse.ts`, and broadcasts the fresh `{ title, cards }` to
-   every open `/ws` WebSocket connection. **(present)** Diffing the new card
+1. `chokidar` (`src/server/watch.ts`) watches every discovered `.md` file
+   (one, in single-file mode) for changes. **(present)**
+2. On a change to one file, the server re-reads just that file, re-parses it
+   with `src/parser/parse.ts`, and broadcasts the fresh
+   `{ file, title, cards }` to every open `/ws` WebSocket connection —
+   **not** the other files' documents. **(present)** Diffing the new card
    list against the last-sent one (to avoid a full re-render) is not done —
    the client rebuilds the whole grid on every push.
-3. The client (`src/main.ts`) rebuilds `#content` from the pushed cards.
+3. The client (`src/main.ts`) caches the pushed document by `file` and, if
+   it's the currently selected file, rebuilds `#content` from its cards.
    **(present)** Each card's toggle selection is read from `localStorage` (not
    from the server push), so it is preserved across every rebuild. **(present,
    Increment 6)** The rebuild still replaces the whole grid rather than
    diffing/patching just the changed cards — an optimization left for later if
    it proves necessary.
 4. Target latency: file save → visible dashboard update in **< ~1s** —
-   verified by `tests/watch.spec.ts` (typically completes in a few hundred ms).
+   verified by `tests/watch.spec.ts` (typically completes in a few hundred ms)
+   and, for folder mode, `tests/folder.spec.ts`.
 
 ## Build
 
@@ -427,7 +476,17 @@ Two independent TypeScript builds share `src/` but never mix:
   viewport stacks the 3 cards into a single column and a 1280px viewport lays
   the first two side by side; `empty-doc.spec.ts` serves
   `tests/fixtures/empty.md` (a `#` title with no `##` sections) to verify the
-  dashboard shows a `.empty-state` message instead of a blank grid.
+  dashboard shows a `.empty-state` message instead of a blank grid;
+  `folder.spec.ts` (Increment 13) points the CLI at
+  `tests/fixtures/folder/` (`alpha.md`, `beta.md`, and `nested/gamma.md`, to
+  exercise recursive discovery) to verify: the sidebar lists all three files
+  (id, not just basename, for the nested one) and the first one (`alpha.md`,
+  sort order) renders by default; clicking another sidebar entry switches the
+  rendered dashboard with no page navigation; the nested file is reachable
+  the same way; and the selected file survives a full page reload — plus a
+  second `describe` block re-runs `cli.spec.ts`'s single-file invocation to
+  confirm `#file-nav` stays `hidden` there, i.e. this increment didn't change
+  single-file mode's DOM.
 
 ## Source of truth
 
